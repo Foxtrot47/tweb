@@ -66,6 +66,19 @@ document.addEventListener('DOMContentLoaded', async() => {
 
   setWorkerProxy;
 
+  function setupNotification() {
+    if(!('Notification' in window)) {
+      // Check if the browser supports notifications
+      return ;
+    } else if(Notification.permission !== 'denied') {
+      // We need to ask the user for permission
+      Notification.requestPermission().then((permission) => {
+      });
+    }
+  }
+
+  setupNotification();
+
   // const [_, touchSupport, userAgent, _rootScope, _appStateManager, _I18n, __/* , ___ */] = await Promise.all([
   //   import('./lib/polyfill'),
   //   import('./environment/touchSupport'),

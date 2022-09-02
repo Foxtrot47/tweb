@@ -5,10 +5,12 @@
  */
 
 import DEBUG from '../../config/debug';
+import tabId from '../../config/tabId';
 import ctx from '../../environment/ctx';
 import indexOfAndSplice from '../../helpers/array/indexOfAndSplice';
 import {IS_WORKER} from '../../helpers/context';
 import EventListenerBase from '../../helpers/eventListenerBase';
+import makeError from '../../helpers/makeError';
 import {Awaited, WorkerTaskTemplate, WorkerTaskVoidTemplate} from '../../types';
 import {logger} from '../logger';
 
@@ -61,7 +63,12 @@ interface CloseTask extends SuperMessagePortTask {
 //   type: 'open'
 // }
 
-type Task = InvokeTask | ResultTask | AckTask | PingTask | PongTask | BatchTask | CloseTask/*  | OpenTask */;
+interface LockTask extends SuperMessagePortTask {
+  type: 'lock',
+  payload: string
+}
+
+type Task = InvokeTask | ResultTask | AckTask | PingTask | PongTask | BatchTask | CloseTask/*  | OpenTask */ | LockTask;
 type TaskMap = {
   [type in Task as type['type']]?: (task: Extract<Task, type>, source: MessageEventSource, event: MessageEvent<any>) => void | Promise<any>
 };
@@ -121,7 +128,10 @@ export default class SuperMessagePort<
   protected onPortDisconnect: (source: MessageEventSource) => void;
   // protected onPortConnect: (source: MessageEventSource) => void;
 
-  constructor(logSuffix?: string) {
+  protected heldLocks: Map<SendPort, {resolve: () => void, id: string}>;
+  protected requestedLocks: Map<string, SendPort>;
+
+  constructor(protected logSuffix?: string) {
     super(false);
 
     this.listenPorts = [];
@@ -132,13 +142,8 @@ export default class SuperMessagePort<
     this.pending = new Map();
     this.log = logger('MP' + (logSuffix ? '-' + logSuffix : ''));
     this.debug = DEBUG;
-
-    if(typeof(window) !== 'undefined') {
-      window.addEventListener('beforeunload', () => {
-        const task = this.createTask('close', undefined);
-        this.postMessage(undefined, task);
-      });
-    }
+    this.heldLocks = new Map();
+    this.requestedLocks = new Map();
 
     this.processTaskMap = {
       result: this.processResultTask,
@@ -146,8 +151,9 @@ export default class SuperMessagePort<
       invoke: this.processInvokeTask,
       ping: this.processPingTask,
       pong: this.processPongTask,
-      close: this.processCloseTask
-      // open: this.processOpenTask
+      close: this.processCloseTask,
+      // open: this.processOpenTask,
+      lock: this.processLockTask
     };
   }
 
@@ -180,7 +186,32 @@ export default class SuperMessagePort<
     // const task = this.createTask('open', undefined);
     // this.postMessage(port, task);
 
+    if(typeof(window) !== 'undefined') {
+      if('locks' in navigator) {
+        const id = ['lock', tabId, this.logSuffix || '', Math.random() * 0x7FFFFFFF | 0].join('-');
+        this.log.warn('created lock', id);
+        const promise = new Promise<void>((resolve) => this.heldLocks.set(port, {resolve, id}))
+        .then(() => this.heldLocks.delete(port));
+        navigator.locks.request(id, () => promise);
+        this.resendLockTask(port);
+      } else {
+        window.addEventListener('beforeunload', () => {
+          const task = this.createTask('close', undefined);
+          this.postMessage(undefined, task);
+        });
+      }
+    }
+
     this.releasePending();
+  }
+
+  public resendLockTask(port: SendPort) {
+    const lock = this.heldLocks.get(port);
+    if(!lock) {
+      return;
+    }
+
+    this.pushTask(this.createTask('lock', lock.id), port);
   }
 
   // ! Can't rely on ping because timers can be suspended
@@ -231,7 +262,10 @@ export default class SuperMessagePort<
 
     this.onPortDisconnect?.(port as any);
 
-    const error = new Error('PORT_DISCONNECTED');
+    const heldLock = this.heldLocks.get(port as SendPort);
+    heldLock?.resolve();
+
+    const error = makeError('PORT_DISCONNECTED');
     for(const id in this.awaiting) {
       const task = this.awaiting[id];
       if(task.port === port) {
@@ -406,6 +440,19 @@ export default class SuperMessagePort<
   //   this.onPortConnect?.(source);
   // };
 
+  protected processLockTask = (task: LockTask, source: MessageEventSource, event: MessageEvent) => {
+    const id = task.payload;
+    if(this.requestedLocks.has(id)) {
+      return;
+    }
+
+    this.requestedLocks.set(id, source);
+    navigator.locks.request(id, () => {
+      this.processCloseTask(undefined, source, undefined);
+      this.requestedLocks.delete(id);
+    });
+  };
+
   protected processInvokeTask = async(task: InvokeTask, source: MessageEventSource, event: MessageEvent) => {
     const id = task.id;
     const innerTask = task.payload;
@@ -527,7 +574,7 @@ export default class SuperMessagePort<
 
       const interval = ctx.setInterval(() => {
         this.log.error('task still has no result', task, port);
-      }, 5e3);
+      }, 60e3);
     } else if(false) {
       // let timedOut = false;
       const startTime = Date.now();

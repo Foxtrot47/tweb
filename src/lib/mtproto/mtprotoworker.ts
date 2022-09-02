@@ -28,6 +28,7 @@ import toggleStorages from '../../helpers/toggleStorages';
 import idleController from '../../helpers/idleController';
 import ServiceMessagePort from '../serviceWorker/serviceMessagePort';
 import App from '../../config/app';
+import deferredPromise, {CancellablePromise} from '../../helpers/cancellablePromise';
 
 export type Mirrors = {
   state: State
@@ -63,6 +64,8 @@ class ApiManagerProxy extends MTProtoMessagePort {
 
   public serviceMessagePort: ServiceMessagePort<true>;
   private lastServiceWorker: ServiceWorker;
+
+  private pingServiceWorkerPromise: CancellablePromise<void>;
 
   constructor() {
     super();
@@ -199,6 +202,34 @@ class ApiManagerProxy extends MTProtoMessagePort {
     // this.sendState();
   }
 
+  public pingServiceWorkerWithIframe() {
+    if(this.pingServiceWorkerPromise) {
+      return this.pingServiceWorkerPromise;
+    }
+
+    const promise = this.pingServiceWorkerPromise = deferredPromise<void>();
+    const iframe = document.createElement('iframe');
+    iframe.hidden = true;
+    const onLoad = () => {
+      setTimeout(() => { // ping once in 10 seconds
+        this.pingServiceWorkerPromise = undefined;
+      }, 10e3);
+
+      clearTimeout(timeout);
+      iframe.remove();
+      iframe.removeEventListener('load', onLoad);
+      iframe.removeEventListener('error', onLoad);
+      promise.resolve();
+    };
+    iframe.addEventListener('load', onLoad);
+    iframe.addEventListener('error', onLoad);
+    iframe.src = 'ping/' + (Math.random() * 0xFFFFFFFF | 0);
+    document.body.append(iframe);
+
+    const timeout = window.setTimeout(onLoad, 1e3);
+    return promise;
+  }
+
   private attachServiceWorker(serviceWorker: ServiceWorker) {
     this.lastServiceWorker && this.serviceMessagePort.detachPort(this.lastServiceWorker);
     this.serviceMessagePort.attachSendPort(this.lastServiceWorker = serviceWorker);
@@ -273,6 +304,10 @@ class ApiManagerProxy extends MTProtoMessagePort {
     this.serviceMessagePort.addMultipleEventsListeners({
       port: (payload, source, event) => {
         this.invokeVoid('serviceWorkerPort', undefined, undefined, [event.ports[0]]);
+      },
+
+      hello: (payload, source) => {
+        this.serviceMessagePort.resendLockTask(source);
       }
     });
     // #endif
@@ -322,11 +357,11 @@ class ApiManagerProxy extends MTProtoMessagePort {
 
     originals.forEach((w) => window[w.name as any] = w as any);
 
-    const blob = await get((worker as any).url);
-    const urlsPromise = await this.invoke('createProxyWorkerURLs', blob);
-    const workers = urlsPromise.map((url) => {
-      return new (IS_SHARED_WORKER_SUPPORTED ? SharedWorker : Worker)(url, {type: 'module'});
-    });
+    const originalUrl = (worker as any).url;
+
+    const createWorker = (url: string) => new constructor(url, {type: 'module'});
+    const attachWorkerToPort = (worker: SharedWorker | Worker) => this.attachWorkerToPort(worker, cryptoMessagePort, 'crypto');
+    const constructor = IS_SHARED_WORKER_SUPPORTED ? SharedWorker : Worker;
 
     // let cryptoWorkers = workers.length;
     cryptoMessagePort.addEventListener('port', (payload, source, event) => {
@@ -344,9 +379,13 @@ class ApiManagerProxy extends MTProtoMessagePort {
       // });
     });
 
-    workers.forEach((worker) => {
-      this.attachWorkerToPort(worker, cryptoMessagePort, 'crypto');
-    });
+    const firstWorker = createWorker(originalUrl);
+    attachWorkerToPort(firstWorker);
+
+    const blob = await get(originalUrl);
+    const urlsPromise = await this.invoke('createProxyWorkerURLs', {originalUrl, blob});
+    const workers = urlsPromise.slice(1).map(createWorker);
+    workers.forEach(attachWorkerToPort);
   }
 
   // #if !MTPROTO_SW

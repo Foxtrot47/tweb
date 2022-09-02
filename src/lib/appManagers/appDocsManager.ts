@@ -25,6 +25,7 @@ import getDocumentURL from './utils/docs/getDocumentURL';
 import type {ThumbCache} from '../storages/thumbs';
 import makeError from '../../helpers/makeError';
 import {EXTENSION_MIME_TYPE_MAP} from '../../environment/mimeTypeMap';
+import {THUMB_TYPE_FULL} from '../mtproto/mtproto_config';
 
 export type MyDocument = Document.document;
 
@@ -133,6 +134,7 @@ export class AppDocsManager extends AppManager {
           }
           break;
 
+        case 'documentAttributeCustomEmoji':
         case 'documentAttributeSticker':
           if(attribute.alt !== undefined) {
             doc.stickerEmojiRaw = attribute.alt;
@@ -152,7 +154,7 @@ export class AppDocsManager extends AppManager {
             doc.sticker = 1;
           } else if(doc.mime_type === 'video/webm') {
             if(!getEnvironment().IS_WEBM_SUPPORTED) {
-              return;
+              break;
             }
 
             doc.type = 'sticker';
@@ -326,7 +328,7 @@ export class AppDocsManager extends AppManager {
       w: 0,
       location: {} as any,
       size: file.size,
-      type: 'full'
+      type: THUMB_TYPE_FULL
     } as PhotoSize.photoSize;
     let document: MyDocument = {
       _: 'document',

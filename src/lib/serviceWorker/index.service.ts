@@ -35,20 +35,23 @@ const sendMessagePort = (source: MessageSendPort) => {
 
 const sendMessagePortIfNeeded = (source: MessageSendPort) => {
   if(!connectedWindows.size && !_mtprotoMessagePort) {
+    log('sending message port for mtproto');
     sendMessagePort(source);
   }
 };
 
 const onWindowConnected = (source: WindowClient) => {
-  log('window connected', source.id);
+  log('window connected', source.id, 'windows before', connectedWindows.size);
 
   if(source.frameType === 'none') {
     log.warn('maybe a bugged Safari starting window', source.id);
     return;
   }
 
+  log('windows', Array.from(connectedWindows));
+  serviceMessagePort.invokeVoid('hello', undefined, source);
   sendMessagePortIfNeeded(source);
-  connectedWindows.add(source.id);
+  connectedWindows.set(source.id, source);
 };
 
 export const serviceMessagePort = new ServiceMessagePort<false>();
@@ -81,15 +84,18 @@ getWindowClients().then((windowClients) => {
   });
 });
 
-const connectedWindows: Set<string> = new Set();
+const connectedWindows: Map<string, WindowClient> = new Map();
+(self as any).connectedWindows = connectedWindows;
 listenMessagePort(serviceMessagePort, undefined, (source) => {
+  log('something has disconnected', source);
   const isWindowClient = source instanceof WindowClient;
   if(!isWindowClient || !connectedWindows.has(source.id)) {
+    log.warn('it is not a window');
     return;
   }
 
-  log('window disconnected');
   connectedWindows.delete(source.id);
+  log('window disconnected, left', connectedWindows.size);
   if(!connectedWindows.size) {
     log.warn('no windows left');
 
@@ -128,6 +134,11 @@ const onFetch = (event: FetchEvent): void => {
 
       case 'download': {
         onDownloadFetch(event, params);
+        break;
+      }
+
+      case 'ping': {
+        event.respondWith(new Response('pong'));
         break;
       }
     }

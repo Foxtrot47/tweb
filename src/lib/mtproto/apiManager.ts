@@ -9,18 +9,14 @@
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-// #if MTPROTO_AUTO
-import transportController from './transports/controller';
-import MTTransport from './transports/transport';
-// #endif
-
 import type {UserAuth} from './mtproto_config';
+import type {DcAuthKey, DcId, DcServerSalt, InvokeApiOptions} from '../../types';
+import type {MethodDeclMap} from '../../layer';
+import type TcpObfuscated from './transports/tcpObfuscated';
 import sessionStorage from '../sessionStorage';
 import MTPNetworker, {MTMessage} from './networker';
 import {ConnectionType, constructTelegramWebSocketUrl, DcConfigurator, TransportType} from './dcConfigurator';
 import {logger} from '../logger';
-import type {DcAuthKey, DcId, DcServerSalt, InvokeApiOptions} from '../../types';
-import type {MethodDeclMap} from '../../layer';
 import deferredPromise, {CancellablePromise} from '../../helpers/cancellablePromise';
 import App from '../../config/app';
 import {MOUNT_CLASS_TO} from '../../config/debug';
@@ -36,7 +32,9 @@ import pause from '../../helpers/schedulers/pause';
 import ApiManagerMethods from './api_methods';
 import {getEnvironment} from '../../environment/utils';
 import toggleStorages from '../../helpers/toggleStorages';
-import type TcpObfuscated from './transports/tcpObfuscated';
+import tsNow from '../../helpers/tsNow';
+import transportController from './transports/controller';
+import MTTransport from './transports/transport';
 
 /* class RotatableArray<T> {
   public array: Array<T> = [];
@@ -50,6 +48,7 @@ import type TcpObfuscated from './transports/tcpObfuscated';
 
 const PREMIUM_FILE_NETWORKERS_COUNT = 6;
 const REGULAR_FILE_NETWORKERS_COUNT = 3;
+const DESTROY_NETWORKERS = true;
 
 export class ApiManager extends ApiManagerMethods {
   private cachedNetworkers: {
@@ -93,18 +92,33 @@ export class ApiManager extends ApiManagerMethods {
 
     this.transportType = Modes.transport;
 
-    // #if MTPROTO_AUTO
-    transportController.addEventListener('transport', (transportType) => {
-      this.changeTransportType(transportType);
-    });
-    // #endif
+    if(import.meta.env.VITE_MTPROTO_AUTO && Modes.multipleTransports) {
+      transportController.addEventListener('transport', (transportType) => {
+        this.changeTransportType(transportType);
+      });
+    }
+
+    // * Make sure that the used autologin_token is no more than 10000 seconds old
+    // * https://core.telegram.org/api/url-authorization
+    const REFRESH_CONFIG_INTERVAL = (10000 - 30) * 1000;
+    setInterval(() => {
+      this.getConfig(true);
+    }, REFRESH_CONFIG_INTERVAL);
   }
 
   protected after() {
+    const result = super.after();
+
     this.apiUpdatesManager.addMultipleEventsListeners({
       updateConfig: () => {
         this.getConfig(true);
         this.getAppConfig(true);
+      }
+    });
+
+    this.rootScope.addEventListener('user_auth', () => {
+      if(this.config) { // refresh configs if had a config during authorization
+        this.apiUpdatesManager.processLocalUpdate({_: 'updateConfig'});
       }
     });
 
@@ -126,6 +140,8 @@ export class ApiManager extends ApiManagerMethods {
         }
       });
     });
+
+    return result;
   }
 
   // private lol = false;
@@ -148,14 +164,13 @@ export class ApiManager extends ApiManagerMethods {
   } */
 
   private getTransportType(connectionType: ConnectionType) {
-    // #if MTPROTO_HTTP_UPLOAD
-    // @ts-ignore
-    const transportType: TransportType = connectionType === 'upload' && getEnvironment().IS_SAFARI ? 'https' : 'websocket';
-    // const transportType: TransportType = connectionType !== 'client' ? 'https' : 'websocket';
-    // #else
-    // @ts-ignore
-    const transportType: TransportType = this.transportType;
-    // #endif
+    let transportType: TransportType;
+    if(import.meta.env.VITE_MTPROTO_HTTP_UPLOAD) {
+      transportType = connectionType === 'upload' && getEnvironment().IS_SAFARI ? 'https' : 'websocket';
+      // const transportType: TransportType = connectionType !== 'client' ? 'https' : 'websocket';
+    } else {
+      transportType = this.transportType;
+    }
 
     return transportType;
   }
@@ -237,7 +252,7 @@ export class ApiManager extends ApiManagerMethods {
 
   public async setUserAuth(userAuth: UserAuth | UserId) {
     if(typeof(userAuth) === 'string' || typeof(userAuth) === 'number') {
-      userAuth = {dcID: 0, date: Date.now() / 1000 | 0, id: userAuth.toPeerId(false)};
+      userAuth = {dcID: 0, date: tsNow(true), id: userAuth.toPeerId(false)};
     }
 
     this.rootScope.dispatchEvent('user_auth', userAuth);
@@ -337,16 +352,30 @@ export class ApiManager extends ApiManagerMethods {
     // @ts-ignore
     const maxNetworkers = connectionType === 'client' || transportType === 'https' ? 1 : (this.rootScope.premium ? PREMIUM_FILE_NETWORKERS_COUNT : REGULAR_FILE_NETWORKERS_COUNT);
     if(networkers.length >= maxNetworkers) {
-      let i = maxNetworkers - 1, found = false;
-      for(; i >= 0; --i) {
-        if(networkers[i].isOnline) {
-          found = true;
-          break;
+      let networker = networkers[0];
+      if(maxNetworkers > 1) {
+        let foundRequests = Infinity, foundNetworker: MTPNetworker, foundIndex: number;
+        for(let i = maxNetworkers - 1; i >= 0; --i) {
+          const networker = networkers[i];
+          const {activeRequests, isOnline} = networker;
+          if(activeRequests < foundRequests && isOnline) {
+            foundRequests = foundRequests;
+            foundNetworker = networker;
+            foundIndex = i;
+          }
+        }
+
+        if(foundNetworker) {
+          networker = foundNetworker;
+        } else {
+          foundIndex = maxNetworkers - 1;
+        }
+
+        if(foundIndex) {
+          networkers.unshift(networker = networkers.splice(foundIndex, 1)[0]);
         }
       }
 
-      const networker = networkers.splice(found ? i : maxNetworkers - 1, 1)[0];
-      networkers.unshift(networker);
       return Promise.resolve(networker);
     }
 
@@ -362,8 +391,8 @@ export class ApiManager extends ApiManagerMethods {
     return this.gettingNetworkers[getKey] = Promise.all([ak, ss].map((key) => sessionStorage.get(key)))
     .then(async([authKeyHex, serverSaltHex]) => {
       let networker: MTPNetworker, error: any;
-      if(authKeyHex && authKeyHex.length === 512) {
-        if(!serverSaltHex || serverSaltHex.length !== 16) {
+      if(authKeyHex?.length === 512) {
+        if(serverSaltHex?.length !== 16) {
           serverSaltHex = 'AAAAAAAAAAAAAAAA';
         }
 
@@ -376,9 +405,18 @@ export class ApiManager extends ApiManagerMethods {
         try { // if no saved state
           const auth = await this.authorizer.auth(dcId);
 
+          authKeyHex = bytesToHex(auth.authKey);
+          serverSaltHex = bytesToHex(auth.serverSalt);
+
+          if(dcId === App.baseDcId) {
+            sessionStorage.set({
+              auth_key_fingerprint: authKeyHex.slice(0, 8)
+            });
+          }
+
           sessionStorage.set({
-            [ak]: bytesToHex(auth.authKey),
-            [ss]: bytesToHex(auth.serverSalt)
+            [ak]: authKeyHex,
+            [ss]: serverSaltHex
           });
 
           networker = this.networkerFactory.getNetworker(dcId, auth.authKey, auth.authKeyId, auth.serverSalt, options);
@@ -442,7 +480,7 @@ export class ApiManager extends ApiManagerMethods {
   }
 
   public setOnDrainIfNeeded(networker: MTPNetworker) {
-    if(networker.onDrain) {
+    if(!DESTROY_NETWORKERS || networker.onDrain) {
       return;
     }
 
@@ -519,7 +557,7 @@ export class ApiManager extends ApiManagerMethods {
 
       if(!options.noErrorBox) {
         error.input = method;
-        error.stack = stack || (error.originalError && error.originalError.stack) || error.stack || (new Error()).stack;
+        // error.stack = stack || (error.originalError && error.originalError.stack) || error.stack || (new Error()).stack;
         setTimeout(() => {
           if(!error.handled) {
             if(error.code === 401) {
@@ -539,7 +577,7 @@ export class ApiManager extends ApiManagerMethods {
     let dcId: DcId;
 
     let cachedNetworker: MTPNetworker;
-    const stack = (new Error()).stack || 'empty stack';
+    // const stack = (new Error()).stack || 'empty stack';
     const performRequest = (): Promise<any> => {
       if(afterMessageId) {
         const after = this.afterMessageTempIds[afterMessageId];
@@ -587,7 +625,7 @@ export class ApiManager extends ApiManagerMethods {
 
           return this.cachedExportPromise[dcId].then(() => performRequest());
         } else if(error.code === 303) {
-          const newDcId = +error.type.match(/^(PHONE_MIGRATE_|NETWORK_MIGRATE_|USER_MIGRATE_)(\d+)/)[2] as DcId;
+          const newDcId = +error.type.match(/^(PHONE_MIGRATE_|NETWORK_MIGRATE_|USER_MIGRATE_|STATS_MIGRATE_)(\d+)/)[2] as DcId;
           if(newDcId !== dcId) {
             if(options.dcId) {
               options.dcId = newDcId;
@@ -608,10 +646,35 @@ export class ApiManager extends ApiManagerMethods {
         } else if(error.code === 400 && error.type === 'CONNECTION_NOT_INITED') {
           this.networkerFactory.unsetConnectionInited();
           return performRequest();
-        } else if(!options.rawError && error.code === 420) {
-          const waitTime = +error.type.match(/^FLOOD_WAIT_(\d+)/)[1] || 1;
+        } else if(!options.rawError && error.code === 420 && !error.type.includes('SLOWMODE_WAIT')) {
+          const match = error.type.match(/^FLOOD_WAIT_(\d+)/) || error.type.match(/_(\d+)_?/);
+          let waitTime: number;
+          if(match) {
+            waitTime = +match[1];
+          }
 
-          if(waitTime > (options.floodMaxTimeout !== undefined ? options.floodMaxTimeout : 60) && !options.prepareTempMessageId) {
+          if(error.type.includes('FLOOD_PREMIUM_WAIT')) {
+            Promise.all([
+              this.getAppConfig(),
+              this.appStateManager.getState()
+            ]).then(([appConfig, state]) => {
+              const timestamp = tsNow(true);
+              const shouldShowToast = (timestamp - (state.shownUploadSpeedTimestamp || 0)) >= appConfig.upload_premium_speedup_notify_period;
+              if(!shouldShowToast) {
+                return;
+              }
+
+              this.appStateManager.pushToState('shownUploadSpeedTimestamp', timestamp);
+              this.rootScope.dispatchEvent('file_speed_limited', {
+                increaseTimes: (options.fileUpload ? appConfig.upload_premium_speedup_upload : appConfig.upload_premium_speedup_download) || 10,
+                isUpload: !!options.fileUpload
+              });
+            });
+          }
+
+          waitTime ||= 1;
+
+          if(waitTime > (options.floodMaxTimeout ?? 60) && !options.prepareTempMessageId) {
             throw error;
           }
 
@@ -655,9 +718,9 @@ export class ApiManager extends ApiManagerMethods {
       cachedNetworker.attachPromise(deferred, options as MTMessage);
       return promise;
     })
-    .then(deferred.resolve)
+    .then(deferred.resolve.bind(deferred))
     .catch(rejectPromise)
-    .catch(deferred.reject);
+    .catch(deferred.reject.bind(deferred));
 
     return deferred;
   }

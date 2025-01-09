@@ -5,16 +5,14 @@
  */
 
 import type {MyDialogFilter} from '../../../lib/storages/filters';
-import type {DialogFilterSuggested} from '../../../layer';
+import type {DialogFilter, DialogFilterSuggested} from '../../../layer';
 import type _rootScope from '../../../lib/rootScope';
 import {SliderSuperTab} from '../../slider';
 import lottieLoader, {LottieLoader} from '../../../lib/rlottie/lottieLoader';
-import {toast} from '../../toast';
 import Button from '../../button';
 import rootScope from '../../../lib/rootScope';
 import AppEditFolderTab from './editFolder';
 import Row from '../../row';
-import {SettingSection} from '..';
 import {i18n, i18n_, LangPackKey, join} from '../../../lib/langPack';
 import cancelEvent from '../../../helpers/dom/cancelEvent';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
@@ -23,6 +21,11 @@ import RLottiePlayer from '../../../lib/rlottie/rlottiePlayer';
 import wrapEmojiText from '../../../lib/richTextProcessor/wrapEmojiText';
 import {FOLDER_ID_ALL, FOLDER_ID_ARCHIVE, REAL_FOLDERS} from '../../../lib/mtproto/mtproto_config';
 import replaceContent from '../../../helpers/dom/replaceContent';
+import SettingSection from '../../settingSection';
+import Sortable from '../../../helpers/dom/sortable';
+import whichChild from '../../../helpers/dom/whichChild';
+import indexOfAndSplice from '../../../helpers/array/indexOfAndSplice';
+import showLimitPopup from '../../popups/limit';
 
 export default class AppChatFoldersTab extends SliderSuperTab {
   private createFolderBtn: HTMLElement;
@@ -30,9 +33,17 @@ export default class AppChatFoldersTab extends SliderSuperTab {
   private suggestedSection: SettingSection;
   private stickerContainer: HTMLElement;
   private animation: RLottiePlayer;
+  private list: HTMLElement;
 
   private filtersRendered: {[filterId: number]: Row} = {};
   private loadAnimationPromise: ReturnType<LottieLoader['waitForFirstFrame']>;
+
+  public static getInitArgs() {
+    return {
+      animationData: lottieLoader.loadAnimationFromURLManually('Folders_1'),
+      filters: rootScope.managers.filtersStorage.getDialogFilters()
+    };
+  }
 
   private async renderFolder(
     dialogFilter: DialogFilterSuggested | MyDialogFilter,
@@ -49,13 +60,13 @@ export default class AppChatFoldersTab extends SliderSuperTab {
     } else {
       filter = dialogFilter;
 
-      const enabledFilters = Object.keys(filter.pFlags).length;
+      const pFlags = (filter as DialogFilter.dialogFilter).pFlags || {};
+      const enabledFilters = Object.keys(pFlags).length;
       /* (['include_peers', 'exclude_peers'] as ['include_peers', 'exclude_peers']).forEach((key) => {
         enabledFilters += +!!filter[key].length;
       }); */
 
       if(enabledFilters === 1) {
-        const pFlags = filter.pFlags;
         let k: LangPackKey;
         if(pFlags.contacts) k = 'FilterAllContacts';
         else if(pFlags.non_contacts) k = 'FilterAllNonContacts';
@@ -72,9 +83,9 @@ export default class AppChatFoldersTab extends SliderSuperTab {
         const folder = await this.managers.dialogsStorage.getFolderDialogs(filter.id);
         let chats = 0, channels = 0, groups = 0;
         await Promise.all(folder.map(async(dialog) => {
-          if(await this.managers.appPeersManager.isAnyGroup(dialog.peerId)) groups++;
-          else if(await this.managers.appPeersManager.isBroadcast(dialog.peerId)) channels++;
-          else chats++;
+          if(await this.managers.appPeersManager.isAnyGroup(dialog.peerId)) ++groups;
+          else if(await this.managers.appPeersManager.isBroadcast(dialog.peerId)) ++channels;
+          else ++chats;
         }));
 
         if(chats) d.push(i18n('Chats', [chats]));
@@ -84,25 +95,33 @@ export default class AppChatFoldersTab extends SliderSuperTab {
     }
 
     if(!row) {
+      const isSuggested = dialogFilter._ === 'dialogFilterSuggested';
       row = new Row({
-        title: filter.id === FOLDER_ID_ALL ? i18n('FilterAllChats') : wrapEmojiText(filter.title),
+        title: filter.id === FOLDER_ID_ALL && !isSuggested ? i18n('FilterAllChats') : wrapEmojiText(filter.title),
         subtitle: description,
-        clickable: filter.id !== FOLDER_ID_ALL
+        clickable: true,
+        buttonRightLangKey: isSuggested ? 'Add' : undefined
       });
 
       if(d.length) {
         row.subtitle.append(...join(d));
       }
 
-      if(dialogFilter._ === 'dialogFilter') {
+      if(!isSuggested) {
         const filterId = filter.id;
         if(!this.filtersRendered[filter.id] && filter.id !== FOLDER_ID_ALL) {
+          const initArgs = AppEditFolderTab.getInitArgs();
           attachClickEvent(row.container, async() => {
-            this.slider.createTab(AppEditFolderTab).open(await this.managers.filtersStorage.getFilter(filterId));
+            const filter = await this.managers.filtersStorage.getFilter(filterId);
+            const tab = this.slider.createTab(AppEditFolderTab);
+            tab.setInitFilter(filter);
+            tab.open(initArgs);
           }, {listenerSetter: this.listenerSetter});
         }
 
         this.filtersRendered[filter.id] = row;
+
+        row.makeSortable();
       }
     } else {
       if(filter.id !== FOLDER_ID_ALL) {
@@ -125,10 +144,10 @@ export default class AppChatFoldersTab extends SliderSuperTab {
       }
     }
 
-    return div;
+    return row;
   }
 
-  protected async init() {
+  public init(p: ReturnType<typeof AppChatFoldersTab['getInitArgs']> = AppChatFoldersTab.getInitArgs()) {
     this.container.classList.add('chat-folders-container');
     this.setTitle('ChatList.Filter.List.Title');
 
@@ -141,7 +160,7 @@ export default class AppChatFoldersTab extends SliderSuperTab {
     caption.classList.add('caption');
     i18n_({element: caption, key: 'ChatList.Filter.Header'});
 
-    this.createFolderBtn = Button('btn-primary btn-color-primary btn-control tgico', {
+    this.createFolderBtn = Button('btn-primary btn-color-primary btn-control', {
       text: 'ChatList.Filter.NewTitle',
       icon: 'add'
     });
@@ -149,34 +168,44 @@ export default class AppChatFoldersTab extends SliderSuperTab {
     this.foldersSection = new SettingSection({
       name: 'Filters'
     });
-    this.foldersSection.container.style.display = 'none';
+    this.foldersSection.container.classList.add('hide');
+
+    this.list = document.createElement('div');
+    this.foldersSection.content.append(this.list);
 
     this.suggestedSection = new SettingSection({
       name: 'FilterRecommended'
     });
-    this.suggestedSection.container.style.display = 'none';
+    this.suggestedSection.container.classList.add('hide');
 
-    this.scrollable.append(this.stickerContainer, caption, this.createFolderBtn, this.foldersSection.container, this.suggestedSection.container);
+    this.scrollable.append(
+      this.stickerContainer,
+      caption,
+      this.createFolderBtn,
+      this.foldersSection.container,
+      this.suggestedSection.container
+    );
 
     attachClickEvent(this.createFolderBtn, async() => {
       if(!(await this.canCreateFolder())) {
-        toast('Sorry, you can\'t create more folders.');
+        showLimitPopup('folders');
       } else {
         this.slider.createTab(AppEditFolderTab).open();
       }
     }, {listenerSetter: this.listenerSetter});
 
     const onFiltersContainerUpdate = () => {
-      this.foldersSection.container.style.display = Object.keys(this.filtersRendered).length ? '' : 'none';
+      this.foldersSection.container.classList.toggle('hide', !Object.keys(this.filtersRendered).length);
     };
 
-    this.managers.filtersStorage.getDialogFilters().then(async(filters) => {
+    const loadPromises: Promise<any>[] = [];
+    const renderFiltersPromise = p.filters.then(async(filters) => {
       for(const filter of filters) {
         if(filter.id === FOLDER_ID_ARCHIVE) {
           continue;
         }
 
-        await this.renderFolder(filter, this.foldersSection.content, undefined, true);
+        await this.renderFolder(filter, this.list, undefined, true);
       }
 
       this.toggleAllChats();
@@ -184,12 +213,14 @@ export default class AppChatFoldersTab extends SliderSuperTab {
       onFiltersContainerUpdate();
     });
 
+    loadPromises.push(renderFiltersPromise);
+
     this.listenerSetter.add(rootScope)('filter_update', async(filter) => {
       const filterRendered = this.filtersRendered[filter.id];
       if(filterRendered) {
         await this.renderFolder(filter, null, filterRendered);
       } else if(filter.id !== FOLDER_ID_ARCHIVE) {
-        await this.renderFolder(filter, this.foldersSection.content, undefined, true);
+        await this.renderFolder(filter, this.list, undefined, true);
       }
 
       onFiltersContainerUpdate();
@@ -226,24 +257,50 @@ export default class AppChatFoldersTab extends SliderSuperTab {
       this.toggleAllChats();
     });
 
-    this.loadAnimationPromise = lottieLoader.loadAnimationAsAsset({
-      container: this.stickerContainer,
-      loop: false,
-      autoplay: false,
-      width: 86,
-      height: 86
-    }, 'Folders_1').then((player) => {
+    this.loadAnimationPromise = p.animationData.then(async(cb) => {
+      const player = await cb({
+        container: this.stickerContainer,
+        loop: false,
+        autoplay: false,
+        width: 86,
+        height: 86
+      });
+
       this.animation = player;
 
       return lottieLoader.waitForFirstFrame(player);
     });
 
-    this.getSuggestedFilters()
+    loadPromises.push(this.loadAnimationPromise);
+
+    new Sortable({
+      list: this.list,
+      middleware: this.middlewareHelper.get(),
+      onSort: (prevIdx, newIdx) => {
+        let order: number[] = [];
+        for(const filterId in this.filtersRendered) {
+          const row = this.filtersRendered[filterId];
+          const idx = whichChild(row.container);
+          order[idx] = +filterId;
+        }
+
+        order = order.filter((filterId) => filterId !== undefined);
+        if(!rootScope.premium) {
+          indexOfAndSplice(order, FOLDER_ID_ALL);
+          // order.unshift(FOLDER_ID_ALL);
+        }
+
+        this.managers.filtersStorage.updateDialogFiltersOrder(order);
+      },
+      scrollable: this.scrollable
+    });
+
+    this.getSuggestedFilters();
 
     /* return Promise.all([
       this.loadAnimationPromise
     ]); */
-    return this.loadAnimationPromise;
+    return Promise.all(loadPromises);
   }
 
   onOpenAfterTimeout() {
@@ -251,6 +308,8 @@ export default class AppChatFoldersTab extends SliderSuperTab {
       this.animation.autoplay = true;
       this.animation.play();
     });
+
+    return super.onOpenAfterTimeout();
   }
 
   private toggleAllChats() {
@@ -259,45 +318,43 @@ export default class AppChatFoldersTab extends SliderSuperTab {
   }
 
   private async canCreateFolder() {
-    const [appConfig, filters] = await Promise.all([
-      this.managers.apiManager.getAppConfig(),
+    const [limit, filters] = await Promise.all([
+      this.managers.apiManager.getLimit('folders'),
       this.managers.filtersStorage.getDialogFilters()
     ]);
 
     const filtersLength = filters.filter((filter) => !REAL_FOLDERS.has(filter.id)).length;
-    return filtersLength < (rootScope.premium ? appConfig.dialog_filters_limit_premium : appConfig.dialog_filters_limit_default);
+    return filtersLength < limit;
   }
 
   private getSuggestedFilters() {
     return this.managers.filtersStorage.getSuggestedDialogsFilters().then(async(suggestedFilters) => {
-      this.suggestedSection.container.style.display = suggestedFilters.length ? '' : 'none';
+      this.suggestedSection.container.classList.toggle('hide', !suggestedFilters.length);
       Array.from(this.suggestedSection.content.children).slice(1).forEach((el) => el.remove());
 
       for(const filter of suggestedFilters) {
-        const div = await this.renderFolder(filter);
-        const button = Button('btn-primary btn-color-primary', {text: 'Add'});
-        div.append(button);
-        this.suggestedSection.content.append(div);
+        const row = await this.renderFolder(filter);
+        this.suggestedSection.content.append(row.container);
 
+        const button = row.buttonRight;
         attachClickEvent(button, async(e) => {
           cancelEvent(e);
 
           if(!(await this.canCreateFolder())) {
-            toast('Sorry, you can\'t create more folders.');
+            showLimitPopup('folders');
             return;
           }
 
           button.setAttribute('disabled', 'true');
 
-          const f = filter.filter as MyDialogFilter;
+          const f = filter.filter as DialogFilter.dialogFilter;
           f.includePeerIds = [];
           f.excludePeerIds = [];
           f.pinnedPeerIds = [];
 
-          this.managers.filtersStorage.createDialogFilter(f, true).then((bool) => {
-            if(bool) {
-              div.remove();
-            }
+          this.managers.filtersStorage.createDialogFilter(f, true).then(() => {
+            row.container.remove();
+            this.suggestedSection.container.classList.toggle('hide', this.suggestedSection.content.childElementCount === 1);
           }).finally(() => {
             button.removeAttribute('disabled');
           });

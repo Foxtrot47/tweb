@@ -16,16 +16,22 @@ import {fastRaf} from '../helpers/schedulers';
 import SetTransition from './singleTransition';
 import findUpClassName from '../helpers/dom/findUpClassName';
 import cancelEvent from '../helpers/dom/cancelEvent';
-import {attachClickEvent, detachClickEvent, simulateClickEvent} from '../helpers/dom/clickEvent';
+import {attachClickEvent, simulateClickEvent} from '../helpers/dom/clickEvent';
 import replaceContent from '../helpers/dom/replaceContent';
 import windowSize from '../helpers/windowSize';
-import {Message, MessageMedia, Poll, PollResults} from '../layer';
+import {Message, MessageEntity, MessageMedia, PollResults, TextWithEntities} from '../layer';
 import toHHMMSS from '../helpers/string/toHHMMSS';
 import StackedAvatars from './stackedAvatars';
 import setInnerHTML from '../helpers/dom/setInnerHTML';
 import {AppManagers} from '../lib/appManagers/managers';
 import wrapEmojiText from '../lib/richTextProcessor/wrapEmojiText';
 import wrapRichText from '../lib/richTextProcessor/wrapRichText';
+import liteMode from '../helpers/liteMode';
+import getPeerId from '../lib/appManagers/utils/peers/getPeerId';
+import Icon from './icon';
+import htmlToDocumentFragment from '../helpers/dom/htmlToDocumentFragment';
+import {getMiddleware, MiddlewareHelper} from '../helpers/middleware';
+import TranslatableMessage from './translatableMessage';
 
 let lineTotalLength = 0;
 const tailLength = 9;
@@ -119,7 +125,7 @@ const hideQuizHint = (element: HTMLElement, onHide: () => void, timeout: number)
 
   clearTimeout(timeout);
   setTimeout(() => {
-    onHide();
+    onHide?.();
     element.remove();
 
     if(prevQuizHint === element && prevQuizHintOnHide === onHide && prevQuizHintTimeout === timeout) {
@@ -131,34 +137,66 @@ const hideQuizHint = (element: HTMLElement, onHide: () => void, timeout: number)
 
 let prevQuizHint: HTMLElement, prevQuizHintOnHide: () => void, prevQuizHintTimeout: number;
 let isListenerSet = false;
-const setQuizHint = (solution: string, solution_entities: any[], onHide: () => void) => {
+export const setQuizHint = (options: {
+  textElement: HTMLElement | DocumentFragment,
+  textRight?: HTMLElement | DocumentFragment,
+  title?: HTMLElement,
+  onHide?: () => void,
+  appendTo: HTMLElement,
+  from: 'top' | 'bottom',
+  duration: number,
+  icon?: Icon
+}) => {
   if(prevQuizHint) {
     hideQuizHint(prevQuizHint, prevQuizHintOnHide, prevQuizHintTimeout);
   }
 
   const element = document.createElement('div');
-  element.classList.add('quiz-hint');
+  element.classList.add('quiz-hint', 'from-' + options.from);
 
   const container = document.createElement('div');
-  container.classList.add('container', 'tgico');
+  container.classList.add('quiz-hint-container');
+
+  let titleEl: HTMLElement;
+  if(options.title) {
+    titleEl = document.createElement('div');
+    titleEl.classList.add('quiz-hint-title');
+    titleEl.append(options.title);
+    container.classList.add('has-title');
+  }
 
   const textEl = document.createElement('div');
-  textEl.classList.add('text');
+  textEl.classList.add('quiz-hint-text');
 
-  container.append(textEl);
+  let textRightEl: HTMLElement;
+  if(options.textRight) {
+    textRightEl = document.createElement('div');
+    textRightEl.classList.add('quiz-hint-text-right');
+    textRightEl.append(options.textRight);
+    container.classList.add('has-right-text');
+  }
+
+  container.append(...[
+    options.icon && Icon(options.icon, 'quiz-hint-icon'),
+    titleEl,
+    textEl,
+    textRightEl
+  ].filter(Boolean));
   element.append(container);
 
-  setInnerHTML(textEl, wrapRichText(solution, {entities: solution_entities}));
-  appImManager.chat.bubbles.container.append(element);
+  setInnerHTML(textEl, options.textElement);
+  options.appendTo.append(element);
 
   void element.offsetLeft; // reflow
   element.classList.add('active');
 
+  const hide = () => {
+    hideQuizHint(element, options.onHide, timeout);
+  };
+
   prevQuizHint = element;
-  prevQuizHintOnHide = onHide;
-  prevQuizHintTimeout = window.setTimeout(() => {
-    hideQuizHint(element, onHide, prevQuizHintTimeout);
-  }, IS_TOUCH_SUPPORTED ? 5000 : 7000);
+  prevQuizHintOnHide = options.onHide;
+  const timeout = prevQuizHintTimeout = window.setTimeout(hide, options.duration);
 
   if(!isListenerSet) {
     isListenerSet = true;
@@ -168,6 +206,8 @@ const setQuizHint = (solution: string, solution_entities: any[], onHide: () => v
       }
     });
   }
+
+  return {hide};
 };
 
 export default class PollElement extends HTMLElement {
@@ -197,6 +237,10 @@ export default class PollElement extends HTMLElement {
   public message: Message.message;
   public managers: AppManagers;
 
+  public middlewareHelper: MiddlewareHelper;
+  public translatableParams: Parameters<typeof TranslatableMessage>[0];
+  public richTextOptions: Parameters<typeof wrapRichText>[1];
+
   private quizInterval: number;
   private quizTimer: SVGSVGElement;
 
@@ -205,6 +249,8 @@ export default class PollElement extends HTMLElement {
 
   private sendVotePromise: Promise<void>;
   private sentVote = false;
+
+  private detachClickEvent: () => void;
 
   public static setMaxLength() {
     const width = windowSize.width <= 360 ? windowSize.width - 120 : mediaSizes.active.poll.width;
@@ -262,26 +308,35 @@ export default class PollElement extends HTMLElement {
 
     this.classList.toggle('is-multiple', this.isMultiple);
 
-    const multipleSelect = this.isMultiple ? '<span class="poll-answer-selected tgico-check"></span>' : '';
     const votes = poll.answers.map((answer, idx) => {
-      return `
-        <div class="poll-answer" data-index="${idx}">
-          <div class="circle-hover">
-            <div class="animation-ring"></div>
-            <svg class="progress-ring">
-              <circle class="progress-ring__circle" cx="13" cy="13" r="9"></circle>
-            </svg>
-            ${multipleSelect}
-          </div>
-          <div class="poll-answer-percents"></div>
-          <div class="poll-answer-text"></div>
-          <svg version="1.1" class="poll-line" style="display: none;" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 485.9 35" xml:space="preserve">
-            <use href="#poll-line"></use>
+      const html = `
+      <div class="poll-answer" data-index="${idx}">
+        <div class="circle-hover">
+          <div class="animation-ring"></div>
+          <svg class="progress-ring">
+            <circle class="progress-ring__circle" cx="13" cy="13" r="9"></circle>
           </svg>
-          <span class="poll-answer-selected tgico"></span>
         </div>
+        <div class="poll-answer-percents"></div>
+        <div class="poll-answer-text"></div>
+        <svg version="1.1" class="poll-line" style="display: none;" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 485.9 35" xml:space="preserve">
+          <use href="#poll-line"></use>
+        </svg>
+      </div>
       `;
-    }).join('');
+      const fragment = htmlToDocumentFragment(html);
+      if(this.isMultiple) {
+        const span = document.createElement('span');
+        span.classList.add('poll-answer-selected');
+        span.append(Icon('check'));
+        fragment.firstElementChild.firstElementChild.append(span);
+      }
+
+      const span = document.createElement('span');
+      span.classList.add('poll-answer-selected');
+      fragment.firstElementChild.append(span);
+      return fragment;
+    });
 
     this.innerHTML = `
       <div class="poll-title"></div>
@@ -289,12 +344,15 @@ export default class PollElement extends HTMLElement {
         <div class="poll-type"></div>
         <div class="poll-avatars"></div>
       </div>
-      ${votes}`;
+    `;
 
-    setInnerHTML(this.firstElementChild, wrapEmojiText(poll.question));
+    this.append(...votes);
+
+    setInnerHTML(this.firstElementChild, this.wrapSomeText(poll.question));
 
     Array.from(this.querySelectorAll('.poll-answer-text')).forEach((el, idx) => {
-      setInnerHTML(el, wrapEmojiText(poll.answers[idx].text));
+      const element = this.wrapSomeText(poll.answers[idx].text);
+      setInnerHTML(el, element);
     });
 
     this.descDiv = this.firstElementChild.nextElementSibling as HTMLElement;
@@ -351,7 +409,7 @@ export default class PollElement extends HTMLElement {
           const time = Date.now();
           const percents = (closeTime - time) / period;
           const timeLeft = (closeTime - time) / 1000 + 1 | 0;
-          timeLeftDiv.innerHTML = toHHMMSS(timeLeft);
+          timeLeftDiv.textContent = toHHMMSS(timeLeft);
 
           if(timeLeft <= 5) {
             timeLeftDiv.style.color = '#ee545c';
@@ -365,7 +423,7 @@ export default class PollElement extends HTMLElement {
 
           if(time >= closeTime) {
             clearInterval(this.quizInterval);
-            timeLeftDiv.innerHTML = '';
+            timeLeftDiv.replaceChildren();
             // @ts-ignore
             circle.style.strokeDashoffset = circumference;
             this.quizInterval = 0;
@@ -445,14 +503,39 @@ export default class PollElement extends HTMLElement {
 
     if(canVote) {
       this.setVotersCount(results);
-      attachClickEvent(this, this.clickHandler);
+      this.detachClickEvent = attachClickEvent(this, this.clickHandler);
     }
+  }
+
+  wrapSomeText(text: string | TextWithEntities, entities?: MessageEntity[], middleware = this.middlewareHelper.get()) {
+    if(typeof(text) !== 'string') {
+      entities = text.entities;
+      text = text.text;
+    }
+
+    if(!this.translatableParams) {
+      return wrapRichText(text, {
+        ...this.richTextOptions,
+        entities
+      });
+    }
+
+    return TranslatableMessage({
+      ...this.translatableParams,
+      middleware,
+      textWithEntities: {
+        _: 'textWithEntities',
+        text,
+        entities
+      }
+    });
   }
 
   initQuizHint(results: PollResults) {
     if(results.solution && results.solution_entities) {
       const toggleHint = document.createElement('div');
-      toggleHint.classList.add('tgico-tip', 'poll-hint');
+      toggleHint.classList.add('poll-hint');
+      toggleHint.append(Icon('tip'));
       this.descDiv.append(toggleHint);
 
       // let active = false;
@@ -461,9 +544,18 @@ export default class PollElement extends HTMLElement {
 
         // active = true;
         toggleHint.classList.add('active');
-        setQuizHint(results.solution, results.solution_entities, () => {
-          // active = false;
-          toggleHint.classList.remove('active');
+        const middleware = getMiddleware();
+        setQuizHint({
+          textElement: this.wrapSomeText(results.solution, results.solution_entities, middleware.get()),
+          appendTo: appImManager.chat.bubbles.container,
+          from: 'top',
+          duration: IS_TOUCH_SUPPORTED ? 5000 : 7000,
+          icon: 'info2',
+          onHide: () => {
+            // active = false;
+            middleware.destroy();
+            toggleHint.classList.remove('active');
+          }
         });
       });
 
@@ -476,7 +568,7 @@ export default class PollElement extends HTMLElement {
     }
   }
 
-  clickHandler(e: Event) {
+  clickHandler = (e: Event) => {
     const target = findUpClassName(e.target, 'poll-answer') as HTMLElement;
     if(!target) {
       return;
@@ -502,7 +594,7 @@ export default class PollElement extends HTMLElement {
       this.setResults([100, 0], answerIndex);
       target.classList.remove('is-voting');
     }, 1000); */
-  }
+  };
 
   sendVotes(indexes: number[]) {
     if(this.sendVotePromise) return this.sendVotePromise;
@@ -528,13 +620,15 @@ export default class PollElement extends HTMLElement {
   }
 
   performResults(results: PollResults, chosenIndexes: number[], animate = true) {
-    if(!rootScope.settings.animationsEnabled) {
+    if(!liteMode.isAvailable('animations')) {
       animate = false;
     }
 
     if(this.isQuiz && (results.results?.length || this.isClosed)) {
       this.answerDivs.forEach((el, idx) => {
-        el.classList.toggle('is-correct', !!results.results[idx].pFlags.correct);
+        const result = results.results[idx];
+        const isCorrect = !!result.pFlags.correct;
+        el.classList.toggle('is-correct', isCorrect);
       });
 
       if(this.initQuizHint) {
@@ -552,9 +646,7 @@ export default class PollElement extends HTMLElement {
       }
 
       const timeEl = this.descDiv.querySelector('.poll-time');
-      if(timeEl) {
-        timeEl.remove();
-      }
+      timeEl?.remove();
     }
 
     if(this.isClosed) {
@@ -568,9 +660,10 @@ export default class PollElement extends HTMLElement {
       this.chosenIndexes = chosenIndexes.slice();
 
       if(this.isRetracted) {
-        attachClickEvent(this, this.clickHandler);
+        this.detachClickEvent = attachClickEvent(this, this.clickHandler);
       } else {
-        detachClickEvent(this, this.clickHandler);
+        this.detachClickEvent?.();
+        this.detachClickEvent = undefined;
       }
     }
 
@@ -580,7 +673,12 @@ export default class PollElement extends HTMLElement {
 
       this.classList.toggle('no-transition', !animate);
       if(animate) {
-        SetTransition(this, '', !this.isRetracted, 340);
+        SetTransition({
+          element: this,
+          className: '',
+          forwards: !this.isRetracted,
+          duration: 340
+        });
       }
 
       fastRaf(() => {
@@ -598,8 +696,8 @@ export default class PollElement extends HTMLElement {
         this.votersCountDiv.classList.toggle('hide', !!this.chosenIndexes.length);
       }
 
-      const peerIds = (results.recent_voters || []).map((userId) => userId.toPeerId());
-      const stackedAvatars = new StackedAvatars({avatarSize: 16});
+      const peerIds = (results.recent_voters || []).map((peer) => getPeerId(peer));
+      const stackedAvatars = new StackedAvatars({avatarSize: 16, middleware: this.middlewareHelper.get()});
       stackedAvatars.render(peerIds);
       replaceContent(this.avatarsDiv, stackedAvatars.container);
     }
@@ -619,7 +717,18 @@ export default class PollElement extends HTMLElement {
     this.svgLines.forEach((svg) => svg.style.display = '');
 
     this.answerDivs.forEach((el, idx) => {
-      el.classList.toggle('is-chosen', chosenIndexes.includes(idx));
+      const isChosen = chosenIndexes.includes(idx);
+      el.classList.toggle('is-chosen', isChosen);
+
+      const span = el.lastElementChild as HTMLElement;
+      let icon: HTMLElement;
+      if(el.classList.contains('is-correct') || (!this.isQuiz && isChosen)) {
+        icon = Icon('check');
+      } else if(isChosen) {
+        icon = Icon('close');
+      }
+
+      span.replaceChildren(icon);
     });
 
     const maxValue = Math.max(...percents);

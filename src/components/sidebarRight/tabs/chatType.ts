@@ -11,26 +11,34 @@ import Button from '../../button';
 import {setButtonLoader} from '../../putPreloader';
 import RadioField from '../../radioField';
 import Row, {RadioFormFromRows} from '../../row';
-import {SettingSection} from '../../sidebarLeft';
 import {toast} from '../../toast';
 import {UsernameInputField} from '../../usernameInputField';
 import {SliderSuperTabEventable} from '../../sliderTab';
-import I18n from '../../../lib/langPack';
+import I18n, {i18n} from '../../../lib/langPack';
 import PopupPeer from '../../popups/peer';
 import ButtonCorner from '../../buttonCorner';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
 import toggleDisability from '../../../helpers/dom/toggleDisability';
 import CheckboxField from '../../checkboxField';
 import rootScope from '../../../lib/rootScope';
+import SettingSection from '../../settingSection';
+import UsernamesSection from '../../usernamesSection';
+import getPeerEditableUsername from '../../../lib/appManagers/utils/peers/getPeerEditableUsername';
+import getPeerActiveUsernames from '../../../lib/appManagers/utils/peers/getPeerActiveUsernames';
+import {purchaseUsernameCaption} from '../../sidebarLeft/tabs/editProfile';
+import confirmationPopup from '../../confirmationPopup';
+import PopupElement from '../../popups';
+import apiManagerProxy from '../../../lib/mtproto/mtprotoworker';
 
 export default class AppChatTypeTab extends SliderSuperTabEventable {
   public chatId: ChatId;
   public chatFull: ChatFull;
 
-  protected async init() {
+  public async init() {
     this.container.classList.add('edit-peer-container', 'group-type-container');
 
     const isBroadcast = await this.managers.appChatsManager.isBroadcast(this.chatId);
+    const linkedChatId = (this.chatFull as ChatFull.channelFull).linked_chat_id;
 
     this.setTitle(isBroadcast ? 'ChannelType' : 'GroupType');
 
@@ -56,16 +64,32 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
       subtitleLangKey: isBroadcast ? 'ChannelPublicInfo' : 'MegaPublicInfo'
     });
     const form = RadioFormFromRows([privateRow, publicRow], (value) => {
-      const a = [privateSection, publicSection];
+      const a: HTMLElement[][] = [[privateSection.container], [publicContainer]];
       if(value === 'public') a.reverse();
 
-      a[0].container.classList.remove('hide');
-      a[1].container.classList.add('hide');
+      a[0].forEach((container) => container.classList.remove('hide'));
+      a[1].forEach((container) => container.classList.add('hide'));
 
       onChange();
+
+      if(joinRequestSection && !linkedChatId) {
+        joinRequestSection.container.classList.toggle('hide', value !== 'public');
+      }
     });
 
-    const chat: Chat = await this.managers.appChatsManager.getChat(this.chatId);
+    let chat: Chat = apiManagerProxy.getChat(this.chatId);
+
+    const chatUpdateListeners: {[type in 'basic']: (() => void)[]} = {basic: []};
+    const addChatUpdateListener = (callback: () => void, type: 'basic' = 'basic') => {
+      chatUpdateListeners[type].push(callback);
+    };
+
+    this.listenerSetter.add(rootScope)('chat_update', (chatId) => {
+      if(this.chatId === chatId) {
+        chat = apiManagerProxy.getChat(this.chatId) as typeof chat;
+        chatUpdateListeners['basic'].forEach((callback) => callback());
+      }
+    });
 
     section.content.append(form);
 
@@ -85,7 +109,7 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
     const btnRevoke = Button('btn-primary btn-transparent danger', {icon: 'delete', text: 'RevokeLink'});
 
     attachClickEvent(btnRevoke, () => {
-      new PopupPeer('revoke-link', {
+      PopupElement.createPopup(PopupPeer, 'revoke-link', {
         buttons: [{
           langKey: 'RevokeButton',
           callback: () => {
@@ -93,7 +117,7 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
 
             this.managers.appProfileManager.getChatInviteLink(this.chatId, true).then((link) => {
               toggle();
-              linkRow.title.innerHTML = link;
+              linkRow.title.textContent = link;
               // revoked = true;
               // onChange();
             });
@@ -107,7 +131,7 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
     privateSection.content.append(linkRow.container, btnRevoke);
 
     const publicSection = new SettingSection({
-      caption: isBroadcast ? 'Channel.UsernameAboutChannel' : 'Channel.UsernameAboutGroup',
+      caption: true,
       noDelimiter: true
     });
 
@@ -116,10 +140,17 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
 
     const placeholder = 't.me/';
 
+    let changedPrivacy: boolean, changedJoinToSend: boolean, changedJoinRequest: boolean;
     const onChange = () => {
-      const changed = (privateRow.radioField.checked && (originalValue !== placeholder/*  || revoked */)) ||
+      changedPrivacy = (privateRow.radioField.checked && (originalValue !== placeholder/*  || revoked */)) ||
         (linkInputField.isValidToChange() && linkInputField.input.classList.contains('valid'));
-      applyBtn.classList.toggle('is-visible', changed);
+      changedJoinToSend = !!joinToSendRow && joinToSendRow.checkboxField.checked !== originalJoinToSend;
+      changedJoinRequest = !!joinRequestRow && joinRequestRow.checkboxField.checked !== originalJoinRequest;
+      applyBtn.classList.toggle('is-visible', changedPrivacy || changedJoinToSend || changedJoinRequest);
+
+      const {error} = linkInputField;
+      const isPurchase = error?.type === 'USERNAME_PURCHASE_AVAILABLE';
+      setUsername(isPurchase ? linkInputField.getValue() : undefined);
     };
 
     const linkInputField = new UsernameInputField({
@@ -135,7 +166,25 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
       head: placeholder
     }, this.managers);
 
-    const originalValue = placeholder + ((chat as Chat.channel).username || '');
+    const {setUsername, element: p} = purchaseUsernameCaption();
+
+    publicSection.caption.append(
+      p,
+      i18n(isBroadcast ? 'Channel.UsernameAboutChannel' : 'Channel.UsernameAboutGroup')
+    );
+
+    const usernamesSection = new UsernamesSection({
+      peerId: this.chatId.toPeerId(true),
+      peer: chat as Chat.channel,
+      listenerSetter: this.listenerSetter,
+      usernameInputField: linkInputField,
+      middleware: this.middlewareHelper.get()
+    });
+
+    const publicContainer = document.createElement('div');
+    publicContainer.append(publicSection.container, usernamesSection.container);
+
+    const originalValue = placeholder + (getPeerEditableUsername(chat as Chat.channel) || '');
 
     inputWrapper.append(linkInputField.container)
     publicSection.content.append(inputWrapper);
@@ -143,21 +192,129 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
     const applyBtn = ButtonCorner({icon: 'check', className: 'is-visible'});
     this.content.append(applyBtn);
 
-    attachClickEvent(applyBtn, () => {
-      /* const unsetLoader =  */setButtonLoader(applyBtn);
-      const username = publicRow.radioField.checked ? linkInputField.getValue() : '';
-      this.managers.appChatsManager.migrateChat(this.chatId).then((channelId) => {
+    const getUsername = () => publicRow.radioField.checked ? linkInputField.getValue() : '';
+
+    const changePrivacy = async() => {
+      const username = getUsername();
+      const channelId = await this.managers.appChatsManager.migrateChat(this.chatId);
+      if(!username) {
+        return this.managers.appChatsManager.makeChannelPrivate(channelId);
+      } else {
         return this.managers.appChatsManager.updateUsername(channelId, username);
-      }).then(() => {
-        // unsetLoader();
+      }
+    };
+
+    const confirmChangingPrivacy = async() => {
+      const username = getUsername();
+      if(!username) {
+        const chat = apiManagerProxy.getChat(this.chatId);
+        const wasUsername = getPeerEditableUsername(chat as Chat.channel);
+        if(wasUsername) {
+          await confirmationPopup({
+            descriptionLangKey: isBroadcast ? 'ChannelVisibility.Confirm.MakePrivate.Channel' : 'ChannelVisibility.Confirm.MakePrivate.Group',
+            descriptionLangArgs: [wasUsername],
+            button: {
+              langKey: 'OK'
+            }
+          });
+        }
+      }
+    };
+
+    attachClickEvent(applyBtn, async() => {
+      if(changedPrivacy) {
+        await confirmChangingPrivacy();
+      }
+
+      const unsetLoader = setButtonLoader(applyBtn);
+      try {
+        if(changedPrivacy) {
+          await changePrivacy();
+        }
+
+        if(changedJoinToSend || changedJoinRequest) {
+          await Promise.all([
+            changedJoinToSend && this.managers.appChatsManager.toggleJoinToSend(
+              this.chatId,
+              joinToSendRow.checkboxField.checked
+            ),
+            changedJoinRequest && this.managers.appChatsManager.toggleJoinRequest(
+              this.chatId,
+              joinRequestRow.checkboxField.checked
+            )
+          ]);
+        }
+
         this.close();
-      });
+      } catch(err) {
+        unsetLoader();
+      }
     }, {listenerSetter: this.listenerSetter});
 
-    (originalValue !== placeholder ? publicRow : privateRow).radioField.checked = true;
-    linkInputField.setOriginalValue(originalValue);
+    this.scrollable.append(section.container, privateSection.container, publicContainer);
 
-    this.scrollable.append(section.container, privateSection.container, publicSection.container);
+    let joinRequestSection: SettingSection, joinToSendRow: Row, joinRequestRow: Row, originalJoinToSend: boolean, originalJoinRequest: boolean;
+    if(!isBroadcast) {
+      const section = joinRequestSection = new SettingSection({
+        name: 'ChannelSettingsJoinTitle',
+        caption: linkedChatId ? 'ChannelSettingsJoinToSendInfo' : 'ChannelSettingsJoinRequestInfo'
+      });
+
+      joinToSendRow = new Row({
+        titleLangKey: 'ChannelSettingsJoinToSend',
+        checkboxField: new CheckboxField({
+          toggle: true
+        })
+      });
+
+      joinRequestRow = new Row({
+        titleLangKey: 'ChannelSettingsJoinRequest',
+        checkboxField: new CheckboxField({
+          toggle: true
+        })
+      });
+
+      const canToggleJoinRequest = () => {
+        return linkedChatId ? joinToSendRow.checkboxField.checked : !publicContainer.classList.contains('hide');
+      };
+
+      const toggleJoinRequestVisibility = () => {
+        const can = canToggleJoinRequest();
+        joinRequestRow.container.classList.toggle('hide', !can);
+        if(!can && joinRequestRow.checkboxField.checked) {
+          joinRequestRow.checkboxField.checked = false;
+        }
+      };
+
+      const onChatUpdate = () => {
+        originalJoinToSend = !!(chat as Chat.channel).pFlags.join_to_send;
+        originalJoinRequest = !!(chat as Chat.channel).pFlags.join_request;
+        joinToSendRow.checkboxField.setValueSilently(originalJoinToSend);
+        joinRequestRow.checkboxField.setValueSilently(originalJoinRequest);
+        toggleJoinRequestVisibility();
+        onChange();
+      };
+
+      [joinToSendRow, joinRequestRow].forEach((row) => {
+        this.listenerSetter.add(row.checkboxField.input)('change', () => {
+          if(joinToSendRow === row) {
+            toggleJoinRequestVisibility();
+          }
+
+          onChange();
+        });
+      });
+
+      if(!linkedChatId) {
+        joinToSendRow.container.classList.add('hide');
+      }
+
+      addChatUpdateListener(onChatUpdate);
+      onChatUpdate();
+
+      section.content.append(joinToSendRow.container, joinRequestRow.container);
+      this.scrollable.append(section.container);
+    }
 
     {
       const section = new SettingSection({
@@ -165,13 +322,14 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
         caption: isBroadcast ? 'RestrictSavingContentInfoChannel' : 'RestrictSavingContentInfoGroup'
       });
 
-      const checkboxField = new CheckboxField({
-        text: 'RestrictSavingContent',
-        withRipple: true
+      let checkboxField: CheckboxField;
+      const row = new Row({
+        titleLangKey: 'RestrictSavingContent',
+        checkboxField: checkboxField = new CheckboxField({toggle: true})
       });
 
       this.listenerSetter.add(checkboxField.input)('change', () => {
-        const toggle = checkboxField.toggleDisability(true);
+        const toggle = row.toggleDisability(true);
         this.managers.appChatsManager.toggleNoForwards(this.chatId, checkboxField.checked).then(() => {
           toggle();
         });
@@ -181,17 +339,15 @@ export default class AppChatTypeTab extends SliderSuperTabEventable {
         checkboxField.setValueSilently(!!(chat as Chat.channel).pFlags.noforwards);
       };
 
-      this.listenerSetter.add(rootScope)('chat_update', (chatId) => {
-        if(this.chatId === chatId) {
-          onChatUpdate();
-        }
-      });
-
+      addChatUpdateListener(onChatUpdate);
       onChatUpdate();
 
-      section.content.append(checkboxField.label);
+      section.content.append(row.container);
 
       this.scrollable.append(section.container);
     }
+
+    (originalValue !== placeholder || getPeerActiveUsernames(chat as Chat.channel).length ? publicRow : privateRow).radioField.checked = true;
+    linkInputField.setOriginalValue(originalValue, true);
   }
 }

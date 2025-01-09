@@ -4,18 +4,20 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import appImManager from '../../lib/appManagers/appImManager';
+import appImManager, {APP_TABS} from '../../lib/appManagers/appImManager';
 import SidebarSlider from '../slider';
 import mediaSizes, {ScreenSize} from '../../helpers/mediaSizes';
 import AppSharedMediaTab from './tabs/sharedMedia';
 import {MOUNT_CLASS_TO} from '../../config/debug';
 import {AppManagers} from '../../lib/appManagers/managers';
+import appNavigationController from '../appNavigationController';
 
 export const RIGHT_COLUMN_ACTIVE_CLASSNAME = 'is-right-column-shown';
 
 export class AppSidebarRight extends SidebarSlider {
   private isColumnProportionSet = false;
   private sharedMediaTab: AppSharedMediaTab;
+  // public rect: DOMRect;
 
   constructor() {
     super({
@@ -40,7 +42,7 @@ export class AppSidebarRight extends SidebarSlider {
   }
 
   public createSharedMediaTab() {
-    const tab = this.createTab(AppSharedMediaTab, true);
+    const tab = this.createTab(AppSharedMediaTab, false, true);
     tab.slider = this;
     // this.tabsContainer.prepend(tab.container);
     return tab;
@@ -52,7 +54,7 @@ export class AppSidebarRight extends SidebarSlider {
       const idx = this.historyTabIds.indexOf(previousTab);
 
       if(this._selectTab.getFrom() === previousTab.container) {
-        this._selectTab.setFrom(tab.container);
+        this._selectTab.setFrom(tab?.container);
       }
 
       if(tab) {
@@ -89,8 +91,17 @@ export class AppSidebarRight extends SidebarSlider {
   }
 
   private setColumnProportion() {
-    const proportion = this.sidebarEl.scrollWidth / this.sidebarEl.previousElementSibling.scrollWidth;
+    const middleWidth = this.sidebarEl.previousElementSibling.scrollWidth;
+    const proportion = this.sidebarEl.scrollWidth / middleWidth;
     document.documentElement.style.setProperty('--right-column-proportion', '' + proportion);
+    document.documentElement.style.setProperty('--middle-column-width', middleWidth + 'px');
+    document.documentElement.style.setProperty('--middle-column-width-value', '' + middleWidth);
+    // this.rect = this.sidebarEl.getBoundingClientRect();
+  }
+
+  public hide() {
+    document.body.classList.remove(RIGHT_COLUMN_ACTIVE_CLASSNAME);
+    appNavigationController.removeByType('right');
   }
 
   public toggleSidebar(enable?: boolean, animate?: boolean) {
@@ -119,8 +130,14 @@ export class AppSidebarRight extends SidebarSlider {
       this.isColumnProportionSet = true;
     }
 
-    const animationPromise = appImManager.selectTab(active ? 1 : 2, animate);
-    document.body.classList.toggle(RIGHT_COLUMN_ACTIVE_CLASSNAME, enable);
+    const animationPromise = appImManager.selectTab(active ? APP_TABS.CHAT : APP_TABS.PROFILE, animate);
+    if(!enable) this.hide();
+    else {
+      document.body.classList.add(RIGHT_COLUMN_ACTIVE_CLASSNAME);
+      if(!appNavigationController.findItemByType('right')) {
+        this.pushNavigationItem(this.sharedMediaTab);
+      }
+    }
     return animationPromise;
 
     /* return new Promise((resolve, reject) => {

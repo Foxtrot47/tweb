@@ -5,12 +5,11 @@
  */
 
 import type Chat from '../chat/chat';
-import InputField from '../inputField';
+import type {SendFileDetails} from '../../lib/appManagers/appMessagesManager';
+import type {ChatRights} from '../../lib/appManagers/appChatsManager';
 import PopupElement from '.';
 import Scrollable from '../scrollable';
-import {toast} from '../toast';
-import {wrapDocument} from '../wrappers';
-import CheckboxField from '../checkboxField';
+import {toast, toastNew} from '../toast';
 import SendContextMenu from '../chat/sendContextMenu';
 import {createPosterFromMedia, createPosterFromVideo} from '../../helpers/createPoster';
 import {MyDocument} from '../../lib/appManagers/appDocsManager';
@@ -23,67 +22,338 @@ import getGifDuration from '../../helpers/getGifDuration';
 import replaceContent from '../../helpers/dom/replaceContent';
 import createVideo from '../../helpers/dom/createVideo';
 import prepareAlbum from '../prepareAlbum';
-import {MediaSize} from '../../helpers/mediaSize';
+import {makeMediaSize} from '../../helpers/mediaSize';
 import {ThumbCache} from '../../lib/storages/thumbs';
 import onMediaLoad from '../../helpers/onMediaLoad';
 import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
-import {THUMB_TYPE_FULL} from '../../lib/mtproto/mtproto_config';
+import {SEND_WHEN_ONLINE_TIMESTAMP, SERVER_IMAGE_MIME_TYPES, STARS_CURRENCY, THUMB_TYPE_FULL} from '../../lib/mtproto/mtproto_config';
+import wrapDocument from '../wrappers/document';
+import createContextMenu from '../../helpers/dom/createContextMenu';
+import findUpClassName from '../../helpers/dom/findUpClassName';
+import wrapMediaSpoiler, {toggleMediaSpoiler} from '../wrappers/mediaSpoiler';
+import {MiddlewareHelper} from '../../helpers/middleware';
+import animationIntersector, {AnimationItemGroup} from '../animationIntersector';
+import scaleMediaElement from '../../helpers/canvas/scaleMediaElement';
+import {doubleRaf} from '../../helpers/schedulers';
+import defineNotNumerableProperties from '../../helpers/object/defineNotNumerableProperties';
+import {DocumentAttribute, DraftMessage, Photo, PhotoSize} from '../../layer';
+import {getPreviewBytesFromURL} from '../../helpers/bytes/getPreviewURLFromBytes';
+import {renderImageFromUrlPromise} from '../../helpers/dom/renderImageFromUrl';
+import ButtonMenuToggle from '../buttonMenuToggle';
+import InputFieldAnimated from '../inputFieldAnimated';
+import IMAGE_MIME_TYPES_SUPPORTED from '../../environment/imageMimeTypesSupport';
+import VIDEO_MIME_TYPES_SUPPORTED from '../../environment/videoMimeTypesSupport';
+import rootScope from '../../lib/rootScope';
+import shake from '../../helpers/dom/shake';
+import AUDIO_MIME_TYPES_SUPPORTED from '../../environment/audioMimeTypeSupport';
+import liteMode from '../../helpers/liteMode';
+import handleVideoLeak from '../../helpers/dom/handleVideoLeak';
+import wrapDraft from '../wrappers/draft';
+import getRichValueWithCaret from '../../helpers/dom/getRichValueWithCaret';
+import {ChatType} from '../chat/chat';
+import pause from '../../helpers/schedulers/pause';
+import {Accessor, createRoot, createSignal, Setter} from 'solid-js';
+import SelectedEffect from '../chat/selectedEffect';
+import PopupMakePaid from './makePaid';
+import paymentsWrapCurrencyAmount from '../../helpers/paymentsWrapCurrencyAmount';
 
-type SendFileParams = Partial<{
-  file: File,
-  objectURL: string,
-  thumb: {
-    blob: Blob,
-    url: string,
-    size: MediaSize
-  },
-  width: number,
-  height: number,
-  duration: number,
-  noSound: boolean,
-  itemDiv: HTMLElement
-}>;
+type SendFileParams = SendFileDetails & {
+  file?: File,
+  scaledBlob?: Blob,
+  noSound?: boolean,
+  itemDiv: HTMLElement,
+  mediaSpoiler?: HTMLElement,
+  middlewareHelper: MiddlewareHelper
+  // strippedBytes?: PhotoSize.photoStrippedSize['bytes']
+};
 
 let currentPopup: PopupNewMedia;
+
+const MAX_WIDTH = 400 - 16;
 
 export function getCurrentNewMediaPopup() {
   return currentPopup;
 }
 
 export default class PopupNewMedia extends PopupElement {
-  private input: HTMLElement;
   private mediaContainer: HTMLElement;
-  private groupCheckboxField: CheckboxField;
-  private mediaCheckboxField: CheckboxField;
-  private wasInputValue: string;
+  private wasDraft: DraftMessage.draftMessage;
 
   private willAttach: Partial<{
     type: 'media' | 'document',
     isMedia: true,
     group: boolean,
-    sendFileDetails: SendFileParams[]
+    sendFileDetails: SendFileParams[],
+    invertMedia: boolean,
+    stars: number
   }>;
-  private inputField: InputField;
+  private effect: Accessor<DocId>;
+  private setEffect: Setter<DocId>;
+  private messageInputField: InputFieldAnimated;
   private captionLengthMax: number;
 
-  constructor(private chat: Chat, private files: File[], willAttachType: PopupNewMedia['willAttach']['type']) {
-    super('popup-send-photo popup-new-media', {closable: true, withConfirm: 'Modal.Send', confirmShortcutIsSendShortcut: true, body: true, title: true});
+  private animationGroup: AnimationItemGroup;
+
+  constructor(
+    private chat: Chat,
+    private files: File[],
+    willAttachType: PopupNewMedia['willAttach']['type'],
+    private ignoreInputValue?: boolean
+  ) {
+    super('popup-send-photo popup-new-media', {
+      closable: true,
+      withConfirm: 'Modal.Send',
+      confirmShortcutIsSendShortcut: true,
+      body: true,
+      title: true,
+      scrollable: true
+    });
+
+    this.animationGroup = 'NEW-MEDIA';
     this.construct(willAttachType);
+  }
+
+  public static async canSend({peerId, onlyVisible, threadId}: {peerId?: PeerId, onlyVisible?: boolean, threadId?: number}) {
+    const actions: ChatRights[] = [
+      'send_photos',
+      'send_videos',
+      'send_docs',
+      'send_audios',
+      'send_gifs'
+    ];
+
+    const actionsPromises = actions.map((action) => {
+      return peerId.isAnyChat() && !onlyVisible ? rootScope.managers.appChatsManager.hasRights(peerId.toChatId(), action, undefined, threadId ? true : undefined) : true;
+    });
+
+    const out: {[action in ChatRights]?: boolean} = {};
+
+    const results = await Promise.all(actionsPromises);
+    actions.forEach((action, idx) => {
+      out[action] = results[idx];
+    })
+
+    return out;
   }
 
   private async construct(willAttachType: PopupNewMedia['willAttach']['type']) {
     this.willAttach = {
       type: willAttachType,
       sendFileDetails: [],
-      group: false
+      group: true
     };
 
-    const config = await this.managers.apiManager.getConfig();
-    this.captionLengthMax = config.caption_length_max;
+    const captionMaxLength = await this.managers.apiManager.getLimit('caption');
+    this.captionLengthMax = captionMaxLength;
 
-    attachClickEvent(this.btnConfirm, () => this.send(), {listenerSetter: this.listenerSetter});
+    const canSend = await PopupNewMedia.canSend({
+      ...this.chat.getMessageSendingParams(),
+      onlyVisible: true
+    });
 
-    if(this.chat.type !== 'scheduled') {
+    const canSendPhotos = canSend.send_photos;
+    const canSendVideos = canSend.send_videos;
+    const canSendDocs = canSend.send_docs;
+
+    attachClickEvent(this.btnConfirm, async() => (await pause(0), this.send()), {listenerSetter: this.listenerSetter});
+
+    const btnMenu = ButtonMenuToggle({
+      listenerSetter: this.listenerSetter,
+      direction: 'bottom-left',
+      buttons: [{
+        icon: 'plusround',
+        text: 'Add',
+        onClick: () => {
+          this.chat.input.onAttachClick(false, false, false);
+        },
+        verify: () => true
+      }, {
+        icon: 'image',
+        text: 'Popup.Attach.AsMedia',
+        onClick: () => this.changeType('media'),
+        verify: () => {
+          if(!this.hasAnyMedia() || this.willAttach.type !== 'document') {
+            return false;
+          }
+
+          if(!canSendPhotos && !canSendVideos) {
+            return false;
+          }
+
+          if(!canSendPhotos || !canSendVideos) {
+            const mimeTypes = canSendPhotos ? IMAGE_MIME_TYPES_SUPPORTED : VIDEO_MIME_TYPES_SUPPORTED;
+            const {media, files} = this.partition(mimeTypes);
+            if(files.length) {
+              return false;
+            }
+          }
+
+          return true;
+        }
+      }, {
+        icon: 'document',
+        text: 'SendAsFile',
+        onClick: () => this.changeType('document'),
+        verify: () => this.files.length === 1 && this.willAttach.type !== 'document' && canSendDocs
+      }, {
+        icon: 'document',
+        text: 'SendAsFiles',
+        onClick: () => this.changeType('document'),
+        verify: () => this.files.length > 1 && this.willAttach.type !== 'document' && canSendDocs
+      }, {
+        icon: 'groupmedia',
+        text: 'Popup.Attach.GroupMedia',
+        onClick: () => this.changeGroup(true),
+        verify: () => !this.willAttach.group && this.canGroupSomething()
+      }, {
+        icon: 'groupmediaoff',
+        text: 'Popup.Attach.UngroupMedia',
+        onClick: () => this.changeGroup(false),
+        verify: () => this.willAttach.group && this.canGroupSomething()
+      }, {
+        icon: 'mediaspoiler',
+        text: 'EnablePhotoSpoiler',
+        onClick: () => this.changeSpoilers(true),
+        verify: () => this.canToggleSpoilers(true, true)
+      }, {
+        icon: 'mediaspoiler',
+        text: 'Popup.Attach.EnableSpoilers',
+        onClick: () => this.changeSpoilers(true),
+        verify: () => this.canToggleSpoilers(true, false)
+      }, {
+        icon: 'mediaspoileroff',
+        text: 'DisablePhotoSpoiler',
+        onClick: () => this.changeSpoilers(false),
+        verify: () => this.canToggleSpoilers(false, true)
+      }, {
+        icon: 'mediaspoileroff',
+        text: 'Popup.Attach.RemoveSpoilers',
+        onClick: () => this.changeSpoilers(false),
+        verify: () => this.canToggleSpoilers(false, false)
+      }, {
+        icon: 'captionup',
+        text: 'CaptionAbove',
+        onClick: () => this.moveCaption(true),
+        verify: () => this.canMoveCaption() && !this.willAttach.invertMedia
+      }, {
+        icon: 'captiondown',
+        text: 'CaptionBelow',
+        onClick: () => this.moveCaption(false),
+        verify: () => this.canMoveCaption() && !!this.willAttach.invertMedia
+      }, {
+        icon: 'cash_circle',
+        text: 'PaidMedia.Menu.Edit',
+        onClick: () => {
+          PopupElement.createPopup(PopupMakePaid, (value) => {
+            this.setPaidMedia(value);
+          }, this.willAttach.stars);
+        },
+        verify: () => !!this.willAttach.stars && this.canSendPaidMedia()
+      }, {
+        icon: 'cash_circle',
+        text: 'PaidMedia.Menu',
+        onClick: () => {
+          PopupElement.createPopup(PopupMakePaid, (value) => {
+            this.setPaidMedia(value);
+          });
+        },
+        verify: () => !this.willAttach.stars && this.canSendPaidMedia()
+      }]
+    });
+
+    this.header.append(btnMenu);
+
+    this.btnConfirm.remove();
+
+    this.mediaContainer = document.createElement('div');
+    this.mediaContainer.classList.add('popup-photo');
+    this.scrollable.container.append(this.mediaContainer);
+
+    const inputContainer = document.createElement('div');
+    inputContainer.classList.add('popup-input-container');
+
+    const c = document.createElement('div');
+    c.classList.add('popup-input-inputs', 'input-message-container');
+
+    this.messageInputField = new InputFieldAnimated({
+      placeholder: 'PreviewSender.CaptionPlaceholder',
+      name: 'message',
+      withLinebreaks: true,
+      maxLength: this.captionLengthMax
+    });
+
+    this.messageInputField.input.dataset.animationGroup = this.animationGroup;
+    this.listenerSetter.add(this.scrollable.container)('scroll', this.onScroll);
+    this.listenerSetter.add(this.messageInputField.input)('scroll', this.onScroll);
+
+    this.messageInputField.input.classList.replace('input-field-input', 'input-message-input');
+    this.messageInputField.inputFake.classList.replace('input-field-input', 'input-message-input');
+
+    c.append(this.messageInputField.input, this.messageInputField.placeholder, this.messageInputField.inputFake);
+    inputContainer.append(c, this.btnConfirm);
+
+    if(!this.ignoreInputValue && !this.chat.input.editMsgId) {
+      this.wasDraft = this.chat.input.getCurrentInputAsDraft();
+      if(this.wasDraft) {
+        const wrappedDraft = wrapDraft(this.wasDraft, {
+          wrappingForPeerId: this.chat.peerId,
+          animationGroup: this.animationGroup
+        });
+
+        this.messageInputField.setValueSilently(wrappedDraft);
+        this.chat.input.messageInputField.value = '';
+      }
+    }
+
+    this.container.append(inputContainer);
+
+    this.attachFiles();
+
+    this.addEventListener('close', () => {
+      this.files.length = 0;
+      this.willAttach.sendFileDetails.length = 0;
+
+      if(currentPopup === this) {
+        currentPopup = undefined;
+      }
+    });
+
+    let target: HTMLElement, isMedia: boolean, item: SendFileParams;
+    createContextMenu({
+      buttons: [{
+        icon: 'mediaspoiler',
+        text: 'EnablePhotoSpoiler',
+        onClick: () => {
+          this.applyMediaSpoiler(item);
+        },
+        verify: () => isMedia && !item.mediaSpoiler && !this.willAttach.stars
+      }, {
+        icon: 'mediaspoileroff',
+        text: 'DisablePhotoSpoiler',
+        onClick: () => {
+          this.removeMediaSpoiler(item);
+        },
+        verify: () => !!(isMedia && item.mediaSpoiler) && !this.willAttach.stars
+      }],
+      listenTo: this.mediaContainer,
+      listenerSetter: this.listenerSetter,
+      findElement: (e) => {
+        target = findUpClassName(e.target, 'popup-item');
+        isMedia = target.classList.contains('popup-item-media');
+        item = this.willAttach.sendFileDetails.find((i) => i.itemDiv === target);
+        return target;
+      }
+    });
+
+    if(this.chat.type !== ChatType.Scheduled) {
+      createRoot((dispose) => {
+        this.chat.destroyMiddlewareHelper.onDestroy(dispose);
+        const [effect, setEffect] = createSignal<DocId>(this.wasDraft?.effect);
+        this.effect = effect;
+        this.setEffect = setEffect;
+        this.btnConfirm.append(SelectedEffect({effect: this.effect}) as HTMLElement);
+      });
+
       const sendMenu = new SendContextMenu({
         onSilentClick: () => {
           this.chat.input.sendSilent = true;
@@ -94,103 +364,256 @@ export default class PopupNewMedia extends PopupElement {
             this.send();
           });
         },
-        openSide: 'bottom-left',
+        onSendWhenOnlineClick: () => {
+          this.chat.input.setScheduleTimestamp(SEND_WHEN_ONLINE_TIMESTAMP, () => {
+            this.send();
+          });
+        },
+        openSide: 'top-left',
         onContextElement: this.btnConfirm,
-        listenerSetter: this.listenerSetter
+        middleware: this.middlewareHelper.get(),
+        canSendWhenOnline: this.chat.input.canSendWhenOnline,
+        onRef: (element) => {
+          this.container.append(element);
+        },
+        withEffects: () => this.chat.peerId.isUser() && this.chat.peerId !== rootScope.myId,
+        effect: this.effect,
+        onEffect: this.setEffect
       });
 
       sendMenu.setPeerId(this.chat.peerId);
-
-      this.header.append(sendMenu.sendMenu);
     }
 
-    this.mediaContainer = document.createElement('div');
-    this.mediaContainer.classList.add('popup-photo');
-    const scrollable = new Scrollable(null);
-    scrollable.container.append(this.mediaContainer);
-
-    this.inputField = new InputField({
-      placeholder: 'PreviewSender.CaptionPlaceholder',
-      label: 'Caption',
-      name: 'photo-caption',
-      maxLength: this.captionLengthMax,
-      withLinebreaks: true
-    });
-    this.input = this.inputField.input;
-
-    this.inputField.value = this.wasInputValue = this.chat.input.messageInputField.input.innerHTML;
-    this.chat.input.messageInputField.value = '';
-
-    this.body.append(scrollable.container);
-    this.container.append(this.inputField.container);
-
-    this.attachFiles();
-
-    this.addEventListener('close', () => {
-      this.files = [];
-      currentPopup = undefined;
-    });
-
     currentPopup = this;
+  }
+
+  private async canSendPaidMedia() {
+    return await this.managers.appPeersManager.isBroadcast(this.chat.peerId) &&
+      !!(await this.managers.appProfileManager.getChannelFull(this.chat.peerId.toChatId())).pFlags.paid_media_allowed;
+  }
+
+  public willSendPaidMedia() {
+    return this.willAttach.stars &&
+      this.willAttach.type === 'media' &&
+      this.willAttach.sendFileDetails.length <= 10;
+  }
+
+  public setPaidMedia(stars: number) {
+    this.willAttach.stars = stars;
+    this.changeSpoilers(!!stars);
+    this.setUnlockPlaceholders();
+  }
+
+  private setUnlockPlaceholders() {
+    const {stars} = this.willAttach;
+    this.mediaContainer.querySelectorAll('.popup-item-album, .popup-item-media:not(.grouped-item)').forEach((element) => {
+      const className = 'extended-media-buy';
+      element.querySelector(`.${className}`)?.remove();
+
+      if(!this.willSendPaidMedia()) {
+        return;
+      }
+
+      const priceEl = document.createElement('span');
+      priceEl.classList.add(className);
+      priceEl.append(i18n('PaidMedia.Unlock', [paymentsWrapCurrencyAmount(stars, STARS_CURRENCY)]));
+      element.append(priceEl);
+    });
+  }
+
+  private onScroll = () => {
+    const {input} = this.messageInputField;
+    this.scrollable.onAdditionalScroll();
+    if(input.scrollTop > 0 && input.scrollHeight > 130) {
+      this.scrollable.container.classList.remove('scrolled-bottom');
+    }
+  };
+
+  private async applyMediaSpoiler(item: SendFileParams, noAnimation?: boolean) {
+    const middleware = item.middlewareHelper.get();
+    const {width: widthStr, height: heightStr} = item.itemDiv.style;
+
+    let width: number, height: number;
+    if(item.itemDiv.classList.contains('album-item')) {
+      const {width: containerWidthStr, height: containerHeightStr} = item.itemDiv.parentElement.style;
+      const containerWidth = parseInt(containerWidthStr);
+      const containerHeight = parseInt(containerHeightStr);
+
+      width = +widthStr.slice(0, -1) / 100 * containerWidth;
+      height = +heightStr.slice(0, -1) / 100 * containerHeight;
+    } else {
+      width = parseInt(widthStr);
+      height = parseInt(heightStr);
+    }
+
+    const {url} = await scaleMediaElement({
+      media: item.itemDiv.firstElementChild as HTMLImageElement,
+      boxSize: makeMediaSize(40, 40),
+      mediaSize: makeMediaSize(width, height),
+      toDataURL: true,
+      quality: 0.2
+    });
+
+    const strippedBytes = getPreviewBytesFromURL(url);
+    const photoSize: PhotoSize.photoStrippedSize = {
+      _: 'photoStrippedSize',
+      bytes: strippedBytes,
+      type: 'i'
+    };
+
+    item.strippedBytes = strippedBytes;
+
+    const photo: Photo.photo = {
+      _: 'photo',
+      sizes: [
+        photoSize
+      ],
+      id: 0,
+      access_hash: 0,
+      date: 0,
+      dc_id: 0,
+      file_reference: [],
+      pFlags: {}
+    };
+
+    const mediaSpoiler = await wrapMediaSpoiler({
+      middleware,
+      width,
+      height,
+      animationGroup: this.animationGroup,
+      media: photo
+    });
+
+    if(!middleware()) {
+      return;
+    }
+
+    if(!noAnimation) {
+      mediaSpoiler.classList.add('is-revealing');
+    }
+
+    item.mediaSpoiler = mediaSpoiler;
+    item.itemDiv.append(mediaSpoiler);
+
+    await doubleRaf();
+    if(!middleware()) {
+      return;
+    }
+
+    toggleMediaSpoiler({
+      mediaSpoiler,
+      reveal: false
+    });
+  }
+
+  private removeMediaSpoiler(item: SendFileParams) {
+    toggleMediaSpoiler({
+      mediaSpoiler: item.mediaSpoiler,
+      reveal: true,
+      destroyAfter: true
+    });
+
+    item.mediaSpoiler = undefined;
   }
 
   public appendDrops(element: HTMLElement) {
     this.body.append(element);
   }
 
-  get type() {
-    return this.willAttach.type;
+  private partition(mimeTypes = MEDIA_MIME_TYPES_SUPPORTED) {
+    const media: SendFileParams[] = [], files: SendFileParams[] = [], audio: SendFileParams[] = [];
+    this.willAttach.sendFileDetails.forEach((d) => {
+      if(mimeTypes.has(d.file.type)) {
+        media.push(d);
+      } else if(AUDIO_MIME_TYPES_SUPPORTED.has(d.file.type as any)) {
+        audio.push(d);
+      } else {
+        files.push(d);
+      }
+    });
+
+    return {
+      media,
+      files,
+      audio
+    };
   }
 
-  set type(type: PopupNewMedia['willAttach']['type']) {
+  private mediaCount() {
+    return this.partition().media.length;
+  }
+
+  private hasAnyMedia() {
+    return this.mediaCount() > 0;
+  }
+
+  private messagesCount() {
+    let count = 0;
+    this.iterate(() => {
+      ++count;
+    });
+
+    return count;
+  }
+
+  private canGroupSomething() {
+    const {media, files, audio} = this.partition();
+    return media.length > 1 || files.length > 1 || audio.length > 1;
+  }
+
+  private canToggleSpoilers(toggle: boolean, single: boolean) {
+    if(this.willSendPaidMedia()) return false;
+
+    let good = this.willAttach.type === 'media' && this.hasAnyMedia();
+    if(single && good) {
+      good = this.files.length === 1;
+    }
+
+    if(good) {
+      const media = this.willAttach.sendFileDetails
+      .filter((d) => MEDIA_MIME_TYPES_SUPPORTED.has(d.file.type))
+      const mediaWithSpoilers = media.filter((d) => d.mediaSpoiler);
+
+      good = single ? true : media.length > 1;
+
+      if(good) {
+        good = toggle ? media.length !== mediaWithSpoilers.length : media.length === mediaWithSpoilers.length;
+      }
+    }
+
+    return good;
+  }
+
+  private changeType(type: PopupNewMedia['willAttach']['type']) {
+    if(type === 'document') {
+      this.moveCaption(false);
+    }
+
     this.willAttach.type = type;
+    this.attachFiles();
   }
 
-  private appendGroupCheckboxField() {
-    const good = this.files.length > 1;
-    if(good && !this.groupCheckboxField) {
-      this.groupCheckboxField = new CheckboxField({
-        text: 'PreviewSender.GroupItems',
-        name: 'group-items'
-      });
-      this.container.append(...[this.groupCheckboxField.label, this.mediaCheckboxField?.label, this.inputField.container].filter(Boolean));
-
-      this.willAttach.group = true;
-      this.groupCheckboxField.setValueSilently(this.willAttach.group);
-
-      this.listenerSetter.add(this.groupCheckboxField.input)('change', () => {
-        const checked = this.groupCheckboxField.checked;
-
-        this.willAttach.group = checked;
-
-        this.attachFiles();
-      });
-    } else if(this.groupCheckboxField) {
-      this.groupCheckboxField.label.classList.toggle('hide', !good);
-    }
+  public changeGroup(group: boolean) {
+    this.willAttach.group = group;
+    this.attachFiles();
   }
 
-  private appendMediaCheckboxField() {
-    const good = !!this.files.find((file) => MEDIA_MIME_TYPES_SUPPORTED.has(file.type));
-    if(good && !this.mediaCheckboxField) {
-      this.mediaCheckboxField = new CheckboxField({
-        text: 'PreviewSender.CompressFile',
-        name: 'compress-items'
-      });
-      this.container.append(...[this.groupCheckboxField?.label, this.mediaCheckboxField.label, this.inputField.container].filter(Boolean));
+  public changeSpoilers(toggle: boolean) {
+    this.partition().media.forEach((item) => {
+      if(toggle && !item.mediaSpoiler) {
+        this.applyMediaSpoiler(item);
+      } else if(!toggle && item.mediaSpoiler) {
+        this.removeMediaSpoiler(item);
+      }
+    });
+  }
 
-      this.mediaCheckboxField.setValueSilently(this.willAttach.type === 'media');
+  public canMoveCaption() {
+    return !this.messageInputField.isEmpty() && this.willAttach.type === 'media';
+  }
 
-      this.listenerSetter.add(this.mediaCheckboxField.input)('change', () => {
-        const checked = this.mediaCheckboxField.checked;
-
-        this.willAttach.type = checked ? 'media' : 'document';
-
-        this.attachFiles();
-      });
-    } else if(this.mediaCheckboxField) {
-      this.mediaCheckboxField.label.classList.toggle('hide', !good);
-    }
+  public moveCaption(above: boolean) {
+    this.willAttach.invertMedia = above || undefined;
   }
 
   public addFiles(files: File[]) {
@@ -204,24 +627,101 @@ export default class PopupNewMedia extends PopupElement {
 
     if(toPush.length) {
       this.files.push(...toPush);
+
+      if(this.willSendPaidMedia() && this.files.length > 10) {
+        this.changeSpoilers(false);
+      }
+
       this.attachFiles();
     }
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
-    if(target !== this.input) {
-      if(target.tagName === 'INPUT' || target.hasAttribute('contenteditable')) {
+    const {input} = this.messageInputField;
+    if(target !== input) {
+      if(target.tagName === 'INPUT' || target.isContentEditable) {
         return;
       }
 
-      this.input.focus();
-      placeCaretAtEnd(this.input);
+      input.focus();
+      placeCaretAtEnd(input);
     }
   };
 
-  private send(force = false) {
-    if(this.chat.type === 'scheduled' && !force) {
+  private async send(force = false) {
+    let {value: caption, entities} = getRichValueWithCaret(this.messageInputField.input, true, false);
+    if(caption.length > this.captionLengthMax) {
+      toast(I18n.format('Error.PreviewSender.CaptionTooLong', true));
+      return;
+    }
+
+    const isSlowModeActive = await this.chat.input.showSlowModeTooltipIfNeeded({
+      sendingFew: this.messagesCount() > 1,
+      container: this.btnConfirm.parentElement,
+      element: this.btnConfirm
+    });
+    if(isSlowModeActive) {
+      return;
+    }
+
+    const {input} = this.chat;
+
+    const canSend = await PopupNewMedia.canSend(this.chat.getMessageSendingParams());
+    const willAttach = this.willAttach;
+    willAttach.isMedia = willAttach.type === 'media' || undefined;
+    const {sendFileDetails, isMedia} = willAttach;
+
+    let foundBad = false;
+    this.iterate((sendFileParams) => {
+      if(foundBad) {
+        return;
+      }
+
+      const isBad: (LangPackKey | boolean)[] = sendFileParams.map((params) => {
+        const a: [Set<string> | (() => boolean), LangPackKey, ChatRights][] = [
+          [AUDIO_MIME_TYPES_SUPPORTED, 'GlobalAttachAudioRestricted', 'send_audios'],
+          [() => !MEDIA_MIME_TYPES_SUPPORTED.has(params.file.type), 'GlobalAttachDocumentsRestricted', 'send_docs']
+        ];
+
+        if(isMedia) {
+          a.unshift(
+            [IMAGE_MIME_TYPES_SUPPORTED, 'GlobalAttachPhotoRestricted', 'send_photos'],
+            [() => VIDEO_MIME_TYPES_SUPPORTED.has(params.file.type as any) && params.noSound, 'GlobalAttachGifRestricted', 'send_gifs'],
+            [VIDEO_MIME_TYPES_SUPPORTED, 'GlobalAttachVideoRestricted', 'send_videos']
+          );
+        }
+
+        const found = a.find(([verify]) => {
+          return typeof(verify) === 'function' ? verify() : verify.has(params.file.type);
+        });
+
+        if(found) {
+          return canSend[found[2]] ? undefined : found[1];
+        }
+
+        return (!isMedia && !canSend.send_docs && 'GlobalAttachDocumentsRestricted') || undefined;
+      });
+
+      const key = isBad.find((i) => typeof(i) === 'string') as LangPackKey;
+      if(key) {
+        toastNew({
+          langPackKey: key
+        });
+
+        if(liteMode.isAvailable('animations')) {
+          shake(this.body);
+        }
+      }
+
+      foundBad ||= !!key;
+    });
+
+    if(foundBad) {
+      return;
+    }
+
+    if(this.chat.type === ChatType.Scheduled && !force) {
       this.chat.input.scheduleSending(() => {
         this.send(true);
       });
@@ -229,67 +729,101 @@ export default class PopupNewMedia extends PopupElement {
       return;
     }
 
-    let caption = this.inputField.value;
-    if(caption.length > this.captionLengthMax) {
-      toast(I18n.format('Error.PreviewSender.CaptionTooLong', true));
-      return;
-    }
-
-    this.hide();
-    const willAttach = this.willAttach;
-    willAttach.isMedia = willAttach.type === 'media' ? true : undefined;
-    const {sendFileDetails, isMedia} = willAttach;
-
-    // console.log('will send files with options:', willAttach);
-
-    const {peerId, input} = this.chat;
-
-    sendFileDetails.forEach((d) => {
-      d.itemDiv = undefined;
-    });
-
     const {length} = sendFileDetails;
     const sendingParams = this.chat.getMessageSendingParams();
-    this.iterate((sendFileDetails) => {
-      if(caption && sendFileDetails.length !== length) {
-        this.managers.appMessagesManager.sendText(peerId, caption, {
+    let effect = this.effect();
+    this.iterate((sendFileParams) => {
+      if(caption && sendFileParams.length !== length) {
+        this.managers.appMessagesManager.sendText({
           ...sendingParams,
-          clearDraft: true
+          text: caption,
+          entities,
+          effect
+          // clearDraft: true
         });
 
-        caption = undefined;
+        caption = entities = effect = undefined;
       }
+
+      const willSendPaidMedia = this.willSendPaidMedia();
+
+      const d: SendFileDetails[] = sendFileParams.map((params) => {
+        return {
+          ...params,
+          file: params.scaledBlob || params.file,
+          spoiler: willSendPaidMedia ? undefined : !!params.mediaSpoiler
+        };
+      });
 
       const w = {
         ...willAttach,
-        sendFileDetails
+        sendFileDetails: d
       };
 
-      this.managers.appMessagesManager.sendAlbum(peerId, w.sendFileDetails.map((d) => d.file), Object.assign({
+      if(!willSendPaidMedia) {
+        delete w.stars;
+      }
+
+      this.managers.appMessagesManager.sendGrouped({
         ...sendingParams,
         caption,
-        isMedia: isMedia,
-        clearDraft: true as true
-      }, w));
+        entities,
+        effect,
+        isMedia,
+        // clearDraft: true,
+        ...w
+      });
 
-      caption = undefined;
+      caption = entities = effect = undefined;
     });
 
-    input.replyToMsgId = this.chat.threadId;
-    input.onMessageSent();
+    if(sendingParams.replyToMsgId) {
+      input.onHelperCancel();
+    }
+    // input.replyToMsgId = this.chat.threadId;
+    // input.onMessageSent();
+    this.wasDraft = undefined;
+
+    this.hide();
   }
 
-  private async attachMedia(params: SendFileParams, itemDiv: HTMLElement) {
+  private modifyMimeTypeForTelegram(mimeType: MTMimeType): MTMimeType {
+    return SERVER_IMAGE_MIME_TYPES.has(mimeType) ? 'image/jpeg' : mimeType;
+  }
+
+  private async scaleImageForTelegram(image: HTMLImageElement, mimeType: MTMimeType, convertIncompatible?: boolean) {
+    const PHOTO_SIDE_LIMIT = 2560;
+    let url = image.src, scaledBlob: Blob;
+    if(
+      mimeType !== 'image/gif' &&
+      (Math.max(image.naturalWidth, image.naturalHeight) > PHOTO_SIDE_LIMIT || (convertIncompatible && !SERVER_IMAGE_MIME_TYPES.has(mimeType)))
+    ) {
+      const {blob} = await scaleMediaElement({
+        media: image,
+        boxSize: makeMediaSize(PHOTO_SIDE_LIMIT, PHOTO_SIDE_LIMIT),
+        mediaSize: makeMediaSize(image.naturalWidth, image.naturalHeight),
+        mimeType: this.modifyMimeTypeForTelegram(mimeType) as any
+      });
+
+      scaledBlob = blob;
+      URL.revokeObjectURL(url);
+      url = await apiManagerProxy.invoke('createObjectURL', blob);
+      await renderImageFromUrlPromise(image, url);
+    }
+
+    return scaledBlob && {url, blob: scaledBlob};
+  }
+
+  private async attachMedia(params: SendFileParams) {
+    const {itemDiv} = params;
     itemDiv.classList.add('popup-item-media');
 
     const file = params.file;
     const isVideo = file.type.startsWith('video/');
 
-    let promise: Promise<void>;
     if(isVideo) {
-      const video = createVideo();
-      const source = document.createElement('source');
-      source.src = params.objectURL = await apiManagerProxy.invoke('createObjectURL', file);
+      const video = createVideo({middleware: params.middlewareHelper.get()});
+      video.src = params.objectURL = await apiManagerProxy.invoke('createObjectURL', file);
       video.autoplay = true;
       video.controls = false;
       video.muted = true;
@@ -298,80 +832,126 @@ export default class PopupNewMedia extends PopupElement {
         video.pause();
       }, {once: true});
 
-      promise = onMediaLoad(video).then(async() => {
-        params.width = video.videoWidth;
-        params.height = video.videoHeight;
-        params.duration = Math.floor(video.duration);
+      itemDiv.append(video);
 
-        const audioDecodedByteCount = (video as any).webkitAudioDecodedByteCount;
-        if(audioDecodedByteCount !== undefined) {
-          params.noSound = !audioDecodedByteCount;
-        }
+      let error: Error;
+      try {
+        const promise = onMediaLoad(video);
+        await handleVideoLeak(video, promise);
+      } catch(err) {
+        error = err as any;
+      }
 
-        itemDiv.append(video);
-        const thumb = await createPosterFromVideo(video);
-        params.thumb = {
-          url: await apiManagerProxy.invoke('createObjectURL', thumb.blob),
-          ...thumb
-        };
-      });
+      params.width = video.videoWidth;
+      params.height = video.videoHeight;
+      params.duration = Math.floor(video.duration);
 
-      video.append(source);
+      if(error) {
+        throw error;
+      }
+
+      const audioDecodedByteCount = (video as any).webkitAudioDecodedByteCount;
+      if(audioDecodedByteCount !== undefined) {
+        params.noSound = !audioDecodedByteCount;
+      }
+
+      const thumb = await createPosterFromVideo(video);
+      params.thumb = {
+        url: await apiManagerProxy.invoke('createObjectURL', thumb.blob),
+        ...thumb
+      };
     } else {
       const img = new Image();
-      promise = new Promise<void>((resolve) => {
-        img.onload = () => {
-          params.width = img.naturalWidth;
-          params.height = img.naturalHeight;
+      itemDiv.append(img);
+      const url = params.objectURL = await apiManagerProxy.invoke('createObjectURL', file);
 
-          itemDiv.append(img);
+      await renderImageFromUrlPromise(img, url);
+      const mimeType = params.file.type as MTMimeType;
+      const scaled = await this.scaleImageForTelegram(img, mimeType, true);
+      if(scaled) {
+        params.objectURL = scaled.url;
+        params.scaledBlob = scaled.blob;
+      }
 
-          if(file.type === 'image/gif') {
-            params.noSound = true;
+      params.width = img.naturalWidth;
+      params.height = img.naturalHeight;
 
-            Promise.all([
-              getGifDuration(img).then((duration) => {
-                params.duration = Math.ceil(duration);
-              }),
+      if(file.type === 'image/gif') {
+        params.noSound = true;
 
-              createPosterFromMedia(img).then(async(thumb) => {
-                params.thumb = {
-                  url: await apiManagerProxy.invoke('createObjectURL', thumb.blob),
-                  ...thumb
-                };
-              })
-            ]).then(() => {
-              resolve();
-            });
-          } else {
-            resolve();
-          }
-        };
-      });
+        return Promise.all([
+          getGifDuration(img).then((duration) => {
+            params.duration = Math.ceil(duration);
+          }),
 
-      img.src = params.objectURL = await apiManagerProxy.invoke('createObjectURL', file);
+          createPosterFromMedia(img).then(async(thumb) => {
+            params.thumb = {
+              url: await apiManagerProxy.invoke('createObjectURL', thumb.blob),
+              ...thumb
+            };
+          })
+        ]).then(() => {});
+      }
     }
-
-    return promise;
   }
 
-  private async attachDocument(params: SendFileParams, itemDiv: HTMLElement): ReturnType<PopupNewMedia['attachMedia']> {
+  private async attachDocument(params: SendFileParams): ReturnType<PopupNewMedia['attachMedia']> {
+    const {itemDiv} = params;
     itemDiv.classList.add('popup-item-document');
     const file = params.file;
 
     const isPhoto = file.type.startsWith('image/');
-    const isAudio = file.type.startsWith('audio/');
+    const isAudio = AUDIO_MIME_TYPES_SUPPORTED.has(file.type as any);
     if(isPhoto || isAudio || file.size < 20e6) {
-      params.objectURL = await apiManagerProxy.invoke('createObjectURL', file);
+      params.objectURL ||= await apiManagerProxy.invoke('createObjectURL', file);
     }
 
-    const doc = {
+    const attributes: DocumentAttribute[] = [];
+
+    let img: HTMLImageElement;
+    if(isPhoto && params.objectURL) {
+      img = new Image();
+      await renderImageFromUrlPromise(img, params.objectURL);
+      const scaled = await this.scaleImageForTelegram(img, params.file.type as MTMimeType);
+      if(scaled) {
+        params.objectURL = scaled.url;
+      }
+    }
+
+    if(isAudio && params.objectURL) {
+      try {
+        // * get audio duration
+        const audio = new Audio();
+        audio.src = params.objectURL;
+        audio.muted = true;
+        audio.autoplay = true;
+        await onMediaLoad(audio);
+        params.duration = audio.duration;
+        attributes.push({
+          _: 'documentAttributeAudio',
+          duration: params.duration,
+          pFlags: {}
+        });
+      } catch(err) {
+        console.error('audio loading error', err);
+      }
+    }
+
+    const doc: MyDocument = {
       _: 'document',
-      file: file,
+      file,
       file_name: file.name || '',
       size: file.size,
-      type: isPhoto ? 'photo' : 'doc'
-    } as MyDocument;
+      type: isAudio ? 'audio' : (isPhoto ? 'photo' : undefined),
+      access_hash: 0,
+      attributes,
+      date: 0,
+      dc_id: 0,
+      file_reference: [],
+      id: 0,
+      pFlags: {},
+      duration: params.duration
+    };
 
     let cacheContext: ThumbCache;
     if(params.objectURL) {
@@ -398,46 +978,37 @@ export default class PopupNewMedia extends PopupElement {
       cacheContext
     });
 
-    const promise = new Promise<void>((resolve) => {
-      const finish = () => {
-        itemDiv.append(docDiv);
-        resolve();
-      };
+    if(isPhoto) {
+      params.width = img.naturalWidth;
+      params.height = img.naturalHeight;
+    }
 
-      if(isPhoto) {
-        const img = new Image();
-        img.src = params.objectURL;
-        img.onload = () => {
-          params.width = img.naturalWidth;
-          params.height = img.naturalHeight;
-
-          finish();
-        };
-
-        img.onerror = finish;
-      } else {
-        finish();
-      }
-    });
-
-    return promise;
+    itemDiv.append(docDiv);
   }
 
   private attachFile = (file: File) => {
     const willAttach = this.willAttach;
     const shouldCompress = this.shouldCompress(file.type);
 
-    const params: SendFileParams = {};
-    params.file = file;
-
     const itemDiv = document.createElement('div');
     itemDiv.classList.add('popup-item');
 
+    const params: SendFileParams = {
+      file
+    } as any;
+
+    // do not pass these properties to worker
+    defineNotNumerableProperties(params, ['scaledBlob', 'middlewareHelper', 'itemDiv', 'mediaSpoiler']);
+
+    params.middlewareHelper = this.middlewareHelper.get().create();
     params.itemDiv = itemDiv;
 
-    const promise = shouldCompress ? this.attachMedia(params, itemDiv) : this.attachDocument(params, itemDiv);
+    const promise = shouldCompress ? this.attachMedia(params) : this.attachDocument(params);
     willAttach.sendFileDetails.push(params);
-    return promise;
+    return promise.catch((err) => {
+      itemDiv.style.backgroundColor = '#000';
+      console.error('error rendering file', err);
+    });
   };
 
   private shouldCompress(mimeType: string) {
@@ -446,15 +1017,20 @@ export default class PopupNewMedia extends PopupElement {
 
   private onRender() {
     // show now
-    if(!this.element.classList.contains('active')) {
-      this.listenerSetter.add(document.body)('keydown', this.onKeyDown);
-      this.addEventListener('close', () => {
-        if(this.wasInputValue) {
-          this.chat.input.messageInputField.value = this.wasInputValue;
-        }
-      });
-      this.show();
+    if(this.element.classList.contains('active')) {
+      return;
     }
+
+    this.listenerSetter.add(document.body)('keydown', this.onKeyDown);
+    animationIntersector.setOnlyOnePlayableGroup(this.animationGroup);
+    this.addEventListener('close', () => {
+      animationIntersector.setOnlyOnePlayableGroup();
+
+      if(!this.ignoreInputValue && this.wasDraft) {
+        this.chat.input.setDraft(this.wasDraft, false, true);
+      }
+    });
+    this.show();
   }
 
   private setTitle() {
@@ -475,14 +1051,7 @@ export default class PopupNewMedia extends PopupElement {
       if([foundPhotos, foundVideos, foundFiles].filter((n) => n > 0).length > 1) {
         key = 'PreviewSender.SendFile';
         args.push(files.length);
-      } else
-
-      /* const sum = foundPhotos + foundVideos;
-      if(sum > 1 && willAttach.group) {
-        key = 'PreviewSender.SendAlbum';
-        const albumsLength = Math.ceil(sum / 10);
-        args.push(albumsLength);
-      } else  */if(foundPhotos) {
+      } else if(foundPhotos) {
         key = 'PreviewSender.SendPhoto';
         args.push(foundPhotos);
       } else if(foundVideos) {
@@ -494,14 +1063,14 @@ export default class PopupNewMedia extends PopupElement {
     replaceContent(title, i18n(key, args));
   }
 
-  private appendMediaToContainer(div: HTMLElement, params: SendFileParams) {
+  private appendMediaToContainer(params: SendFileParams) {
     if(this.shouldCompress(params.file.type)) {
-      const size = calcImageInBox(params.width, params.height, 380, 320);
-      div.style.width = size.width + 'px';
-      div.style.height = size.height + 'px';
+      const size = calcImageInBox(params.width, params.height, MAX_WIDTH, 320);
+      params.itemDiv.style.width = size.width + 'px';
+      params.itemDiv.style.height = size.height + 'px';
     }
 
-    this.mediaContainer.append(div);
+    this.mediaContainer.append(params.itemDiv);
   }
 
   private iterate(cb: (sendFileDetails: SendFileParams[]) => void) {
@@ -514,10 +1083,12 @@ export default class PopupNewMedia extends PopupElement {
     const length = sendFileDetails.length;
     for(let i = 0; i < length;) {
       const firstType = sendFileDetails[i].file.type;
-      let k = 0;
+      let k = 0, isAudio: boolean;
       for(; k < 10 && i < length; ++i, ++k) {
         const type = sendFileDetails[i].file.type;
-        if(this.shouldCompress(firstType) !== this.shouldCompress(type)) {
+        const _isAudio = AUDIO_MIME_TYPES_SUPPORTED.has(type as any);
+        isAudio ??= _isAudio;
+        if(_isAudio !== isAudio || this.shouldCompress(firstType) !== this.shouldCompress(type)) {
           break;
         }
       }
@@ -528,13 +1099,16 @@ export default class PopupNewMedia extends PopupElement {
 
   private attachFiles() {
     const {files, willAttach, mediaContainer} = this;
-    willAttach.sendFileDetails.length = 0;
 
-    this.appendGroupCheckboxField();
-    this.appendMediaCheckboxField();
+    const oldSendFileDetails = willAttach.sendFileDetails.splice(0, willAttach.sendFileDetails.length);
+    oldSendFileDetails.forEach((params) => {
+      params.middlewareHelper.destroy();
+    });
 
-    Promise.all(files.map(this.attachFile)).then(() => {
-      mediaContainer.innerHTML = '';
+    const promises = files.map((file) => this.attachFile(file));
+
+    Promise.all(promises).then(() => {
+      mediaContainer.replaceChildren();
 
       if(!files.length) {
         return;
@@ -543,7 +1117,8 @@ export default class PopupNewMedia extends PopupElement {
       this.setTitle();
 
       this.iterate((sendFileDetails) => {
-        if(this.shouldCompress(sendFileDetails[0].file.type) && sendFileDetails.length > 1) {
+        const shouldCompress = this.shouldCompress(sendFileDetails[0].file.type);
+        if(shouldCompress && sendFileDetails.length > 1) {
           const albumContainer = document.createElement('div');
           albumContainer.classList.add('popup-item-album', 'popup-item');
           albumContainer.append(...sendFileDetails.map((s) => s.itemDiv));
@@ -551,7 +1126,7 @@ export default class PopupNewMedia extends PopupElement {
           prepareAlbum({
             container: albumContainer,
             items: sendFileDetails.map((o) => ({w: o.width, h: o.height})),
-            maxWidth: 380,
+            maxWidth: MAX_WIDTH,
             minWidth: 100,
             spacing: 4
           });
@@ -559,12 +1134,28 @@ export default class PopupNewMedia extends PopupElement {
           mediaContainer.append(albumContainer);
         } else {
           sendFileDetails.forEach((params) => {
-            this.appendMediaToContainer(params.itemDiv, params);
+            this.appendMediaToContainer(params);
           });
         }
+
+        if(!shouldCompress) {
+          return;
+        }
+
+        sendFileDetails.forEach((params) => {
+          const oldParams = oldSendFileDetails.find((o) => o.file === params.file);
+          if(oldParams?.mediaSpoiler || this.willSendPaidMedia()) {
+            this.applyMediaSpoiler(params, true);
+          }
+        });
       });
+
+      this.setUnlockPlaceholders();
     }).then(() => {
       this.onRender();
+      this.onScroll();
     });
   }
 }
+
+(window as any).PopupNewMedia = PopupNewMedia;

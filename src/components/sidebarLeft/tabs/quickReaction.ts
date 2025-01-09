@@ -4,15 +4,15 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {SettingSection} from '..';
+import {AvailableReaction} from '../../../layer';
 import RadioField from '../../radioField';
 import Row, {RadioFormFromRows} from '../../row';
+import SettingSection from '../../settingSection';
 import SliderSuperTab from '../../sliderTab';
-import {wrapStickerToRow} from '../../wrappers';
+import wrapStickerToRow from '../../wrappers/stickerToRow';
 
 export default class AppQuickReactionTab extends SliderSuperTab {
-  protected init() {
-    this.header.classList.add('with-border');
+  public init() {
     this.setTitle('DoubleTapSetting');
     this.container.classList.add('quick-reaction-container');
 
@@ -46,7 +46,7 @@ export default class AppQuickReactionTab extends SliderSuperTab {
           size: 'small'
         });
 
-        if(availableReaction.reaction === quickReaction.reaction) {
+        if(availableReaction.reaction === (quickReaction as AvailableReaction).reaction) {
           radioField.setValueSilently(true);
         }
 
@@ -54,7 +54,7 @@ export default class AppQuickReactionTab extends SliderSuperTab {
       });
 
       const form = RadioFormFromRows(rows, (value) => {
-        this.managers.appReactionsManager.setDefaultReaction(value);
+        this.managers.appReactionsManager.setDefaultReaction({_: 'reactionEmoji', emoticon: value});
       });
 
       section.content.append(form);

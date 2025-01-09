@@ -5,8 +5,7 @@
  */
 
 import {SliderSuperTab} from '../../slider';
-import {SettingSection} from '..';
-import ButtonMenu from '../../buttonMenu';
+import {ButtonMenuSync} from '../../buttonMenu';
 import appDialogsManager, {DIALOG_LIST_ELEMENT_TAG} from '../../../lib/appManagers/appDialogsManager';
 import PopupPickUser from '../../popups/pickUser';
 import rootScope from '../../../lib/rootScope';
@@ -18,13 +17,15 @@ import getUserStatusString from '../../wrappers/getUserStatusString';
 import {attachContextMenuListener} from '../../../helpers/dom/attachContextMenuListener';
 import positionMenu from '../../../helpers/positionMenu';
 import contextMenuController from '../../../helpers/contextMenuController';
+import getPeerActiveUsernames from '../../../lib/appManagers/utils/peers/getPeerActiveUsernames';
+import SettingSection from '../../settingSection';
+import PopupElement from '../../popups';
 
 export default class AppBlockedUsersTab extends SliderSuperTab {
   public peerIds: PeerId[];
   private menuElement: HTMLElement;
 
-  protected init() {
-    this.header.classList.add('with-border');
+  public init() {
     this.container.classList.add('blocked-users-container');
     this.setTitle('BlockedUsers');
 
@@ -40,8 +41,8 @@ export default class AppBlockedUsersTab extends SliderSuperTab {
     this.content.append(btnAdd);
 
     attachClickEvent(btnAdd, (e) => {
-      new PopupPickUser({
-        peerTypes: ['contacts'],
+      PopupElement.createPopup(PopupPickUser, {
+        peerType: ['contacts'],
         placeholder: 'BlockModal.Search.Placeholder',
         onSelect: (peerId) => {
           // console.log('block', peerId);
@@ -55,24 +56,33 @@ export default class AppBlockedUsersTab extends SliderSuperTab {
     section.content.append(list);
 
     const add = async(peerId: PeerId, append: boolean) => {
-      const {dom} = appDialogsManager.addDialogNew({
+      const dialogElement = appDialogsManager.addDialogNew({
         peerId: peerId,
         container: list,
         rippleEnabled: true,
-        avatarSize: 48,
-        append
+        avatarSize: 'abitbigger',
+        append,
+        wrapOptions: {
+          middleware: this.middlewareHelper.get()
+        }
       });
 
-      const user = await this.managers.appUsersManager.getUser(peerId);
-      if(user.pFlags.bot) {
-        dom.lastMessageSpan.append('@' + user.username);
-      } else {
-        if(user.phone) dom.lastMessageSpan.innerHTML = formatUserPhone(user.phone);
-        else dom.lastMessageSpan.append(user.username ? '@' + user.username : getUserStatusString(user));
+      (dialogElement.container as any).dialogElement = dialogElement;
+      const {dom} = dialogElement;
+
+      const user = await this.managers.appUsersManager.getUser(peerId.toUserId());
+      if(!user) {
+        return;
       }
 
-      // dom.titleSpan.innerHTML = 'Raaid El Syed';
-      // dom.lastMessageSpan.innerHTML = '+1 234 567891';
+      const usernames = getPeerActiveUsernames(user);
+      const username = usernames[0];
+      if(user.pFlags.bot) {
+        dom.lastMessageSpan.append('@' + username);
+      } else {
+        if(user.phone) dom.lastMessageSpan.textContent = formatUserPhone(user.phone);
+        else dom.lastMessageSpan.append(username ? '@' + username : getUserStatusString(user));
+      }
     };
 
     for(const peerId of this.peerIds) {
@@ -85,42 +95,50 @@ export default class AppBlockedUsersTab extends SliderSuperTab {
       this.managers.appUsersManager.toggleBlock(peerId, false);
     };
 
-    const element = this.menuElement = ButtonMenu([{
-      icon: 'lockoff',
-      text: 'Unblock',
-      onClick: onUnblock,
-      options: {listenerSetter: this.listenerSetter}
-    }]);
+    const element = this.menuElement = ButtonMenuSync({
+      buttons: [{
+        icon: 'lockoff',
+        text: 'Unblock',
+        onClick: onUnblock,
+        options: {listenerSetter: this.listenerSetter}
+      }]
+    });
     element.id = 'blocked-users-contextmenu';
     element.classList.add('contextmenu');
 
     document.getElementById('page-chats').append(element);
 
-    attachContextMenuListener(this.scrollable.container, (e) => {
-      target = findUpTag(e.target, DIALOG_LIST_ELEMENT_TAG);
-      if(!target) {
+    attachContextMenuListener({
+      element: this.scrollable.container,
+      callback: (e) => {
+        target = findUpTag(e.target, DIALOG_LIST_ELEMENT_TAG);
+        if(!target) {
+          return;
+        }
+
+        if(e instanceof MouseEvent) e.preventDefault();
+        // smth
+        if(e instanceof MouseEvent) e.cancelBubble = true;
+
+        positionMenu(e, element);
+        contextMenuController.openBtnMenu(element);
+      },
+      listenerSetter: this.listenerSetter
+    });
+
+    this.listenerSetter.add(rootScope)('peer_block', (update) => {
+      const {peerId, blocked, blockedMyStoriesFrom} = update;
+      if(blockedMyStoriesFrom) {
         return;
       }
 
-      if(e instanceof MouseEvent) e.preventDefault();
-      // smth
-      if(e instanceof MouseEvent) e.cancelBubble = true;
-
-      positionMenu(e, element);
-      contextMenuController.openBtnMenu(element);
-    }, this.listenerSetter);
-
-    this.listenerSetter.add(rootScope)('peer_block', (update) => {
-      const {peerId, blocked} = update;
       const li = list.querySelector(`[data-peer-id="${peerId}"]`);
       if(blocked) {
         if(!li) {
           add(peerId, false);
         }
-      } else {
-        if(li) {
-          li.remove();
-        }
+      } else if(li) {
+        (li as any).dialogElement.remove();
       }
     });
 

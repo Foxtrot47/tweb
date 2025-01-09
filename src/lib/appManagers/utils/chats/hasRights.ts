@@ -15,15 +15,20 @@ import {ChatRights} from '../../appChatsManager';
  * @param isThread
  * @returns
  */
-export default function hasRights(chat: Chat, action: ChatRights, rights?: ChatAdminRights | ChatBannedRights, isThread?: boolean) {
-  if(chat._ === 'chatEmpty') return false;
+export default function hasRights(
+  chat: Exclude<Chat, Chat.chatEmpty>,
+  action: ChatRights,
+  rights?: ChatAdminRights | ChatBannedRights,
+  isThread?: boolean
+) {
+  if(!chat) return false;
 
   if((chat as Chat.chat).pFlags.deactivated && action !== 'view_messages') {
     return false;
   }
 
   const isCheckingRightsForSelf = rights === undefined;
-  if((chat as Chat.chat).pFlags.creator && isCheckingRightsForSelf) {
+  if((chat as Chat.chat).pFlags.creator && isCheckingRightsForSelf/*  && action !== 'anonymous' */) {
     return true;
   }
 
@@ -53,6 +58,8 @@ export default function hasRights(chat: Chat, action: ChatRights, rights?: ChatA
   // const adminFlags = adminRights?.pFlags || {};
   // const bannedFlags = bannedRights?.pFlags || {};
 
+  const isAdmin = rights._ === 'chatAdminRights';
+
   switch(action) {
     case 'embed_links':
     case 'send_games':
@@ -61,12 +68,19 @@ export default function hasRights(chat: Chat, action: ChatRights, rights?: ChatA
     case 'send_media':
     case 'send_messages':
     case 'send_polls':
-    case 'send_stickers': {
-      if(!isThread && chat.pFlags.left) {
-        return false;
-      }
+    case 'send_stickers':
+    case 'send_photos':
+    case 'send_videos':
+    case 'send_roundvideos':
+    case 'send_audios':
+    case 'send_voices':
+    case 'send_docs':
+    case 'send_plain': {
+      // if(!isThread && chat.pFlags.left) {
+      //   return false;
+      // }
 
-      if(rights._ === 'chatBannedRights' && myFlags[action]) {
+      if(!isAdmin && myFlags[action]) {
         return false;
       }
 
@@ -86,16 +100,19 @@ export default function hasRights(chat: Chat, action: ChatRights, rights?: ChatA
     }
 
     case 'pin_messages': {
-      return rights._ === 'chatAdminRights' ? myFlags[action] || !!myFlags.post_messages : !myFlags[action];
+      return isAdmin ? !!(myFlags[action] || (!(chat as Chat.channel).pFlags.megagroup && myFlags.post_messages)) : !myFlags[action];
     }
 
     // case 'change_info': {
     // return adminRights || isCheckingRightsForSelf ? adminFlags[action] : !myFlags[action];
     // }
 
-    case 'change_info':
-    case 'invite_users': {
-      return rights._ === 'chatAdminRights' ? myFlags[action] : !myFlags[action];
+    case 'invite_links': {
+      if(chat._ === 'chat') {
+        return false;
+      }
+
+      return isAdmin && !!myFlags['invite_users'];
     }
 
     // * only creator can do that
@@ -104,14 +121,43 @@ export default function hasRights(chat: Chat, action: ChatRights, rights?: ChatA
       return false;
     }
 
+    case 'change_info':
+    case 'invite_users': {
+      return isAdmin || (chat as Chat.channel).pFlags.broadcast ? !!myFlags[action] : !myFlags[action];
+    }
+
+    case 'delete_stories':
+    case 'edit_stories':
+    case 'post_stories':
+    case 'add_admins':
+    case 'anonymous':
+    case 'post_messages':
+    case 'edit_messages': {
+      return isAdmin && !!myFlags[action];
+    }
+
     case 'ban_users':
     case 'change_permissions': {
-      return rights._ === 'chatAdminRights' && !!myFlags['ban_users'];
+      return isAdmin && !!myFlags['ban_users'];
     }
 
     case 'view_participants': {
       return !!(chat._ === 'chat' || !chat.pFlags.broadcast || chat.pFlags.creator || chat.admin_rights);
     }
+
+    case 'create_giveaway': {
+      return isAdmin && !!myFlags['post_messages'];
+    }
+
+    // * regular user can only create a new topic and manage their own topics (so this will only say whether user is eligible to create a new topic)
+    // * admin can manage all topics
+    case 'manage_topics': {
+      return isAdmin ? !!myFlags[action] : !myFlags[action];
+    }
+
+    // case 'view_statistics': {
+    //   return isAdmin && !!myFlags['other'];
+    // }
   }
 
   return true;

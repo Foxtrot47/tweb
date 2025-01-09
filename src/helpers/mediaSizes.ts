@@ -20,7 +20,11 @@ type MediaTypeSizes = {
   round: MediaSize,
   documentName: MediaSize,
   invoice: MediaSize,
-  customEmoji: MediaSize
+  extendedInvoice: MediaSize,
+  customEmoji: MediaSize,
+  esgCustomEmoji: MediaSize,
+  emojiStatus: MediaSize,
+  popupSticker: MediaSize
 };
 
 export type MediaSizeType = keyof MediaTypeSizes;
@@ -35,6 +39,10 @@ const MOBILE_SIZE = 600;
 const MEDIUM_SIZE = 1275;
 const LARGE_SIZE = 1680;
 
+const CUSTOM_EMOJI_SIZE = makeMediaSize(20, 20);
+const ESG_CUSTOM_EMOJI_SIZE = makeMediaSize(36, 36);
+const EMOJI_STATUS_SIZE = makeMediaSize(18, 18);
+
 class MediaSizes extends EventListenerBase<{
   changeScreen: (from: ScreenSize, to: ScreenSize) => void,
   resize: () => void
@@ -47,32 +55,40 @@ class MediaSizes extends EventListenerBase<{
 
   private sizes: {[k in 'desktop' | 'handhelds']: MediaTypeSizes} = {
     handhelds: {
-      regular: makeMediaSize(270, 270),
-      webpage: makeMediaSize(270, 200),
-      album: makeMediaSize(270, 0),
+      regular: makeMediaSize(340, 340),
+      webpage: makeMediaSize(340, 200),
+      album: makeMediaSize(340, 0),
       esgSticker: makeMediaSize(68, 68),
       animatedSticker: makeMediaSize(180, 180),
       staticSticker: makeMediaSize(180, 180),
       emojiSticker: makeMediaSize(112, 112),
       poll: makeMediaSize(240, 0),
-      round: makeMediaSize(200, 200),
+      round: makeMediaSize(240, 240),
       documentName: makeMediaSize(200, 0),
-      invoice: makeMediaSize(240, 240),
-      customEmoji: makeMediaSize(18, 18)
+      invoice: makeMediaSize(340, 340),
+      extendedInvoice: makeMediaSize(340, 340),
+      customEmoji: CUSTOM_EMOJI_SIZE,
+      esgCustomEmoji: ESG_CUSTOM_EMOJI_SIZE,
+      emojiStatus: EMOJI_STATUS_SIZE,
+      popupSticker: makeMediaSize(68, 68)
     },
     desktop: {
-      regular: makeMediaSize(420, 340),
-      webpage: makeMediaSize(420, 340),
+      regular: makeMediaSize(420, 400),
+      webpage: makeMediaSize(420, 380),
       album: makeMediaSize(420, 0),
-      esgSticker: makeMediaSize(80, 80),
+      esgSticker: makeMediaSize(72, 72),
       animatedSticker: makeMediaSize(200, 200),
       staticSticker: makeMediaSize(200, 200),
       emojiSticker: makeMediaSize(112, 112),
       poll: makeMediaSize(330, 0),
       round: makeMediaSize(280, 280),
       documentName: makeMediaSize(240, 0),
-      invoice: makeMediaSize(320, 260),
-      customEmoji: makeMediaSize(18, 18)
+      invoice: makeMediaSize(320, 320),
+      extendedInvoice: makeMediaSize(420, 400),
+      customEmoji: CUSTOM_EMOJI_SIZE,
+      esgCustomEmoji: ESG_CUSTOM_EMOJI_SIZE,
+      emojiStatus: EMOJI_STATUS_SIZE,
+      popupSticker: makeMediaSize(80, 80)
     }
   };
 

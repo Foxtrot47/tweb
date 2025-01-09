@@ -8,11 +8,26 @@ import type ListenerSetter from '../listenerSetter';
 import IS_TOUCH_SUPPORTED from '../../environment/touchSupport';
 import simulateEvent from './dispatchEvent';
 
+let lastMouseDownElement: HTMLElement;
+document.addEventListener('mousedown', (e) => {
+  lastMouseDownElement = e.target as HTMLElement;
+  // if((lastMouseDownElement as any)?.cancelMouseDown) {
+  if(lastMouseDownElement?.closest('[cancel-mouse-down]')) {
+    e.preventDefault();
+  }
+});
+
+export function hasMouseMovedSinceDown(e: Event) {
+  if(e.isTrusted && e.type === 'click' && e.target !== lastMouseDownElement) {
+    return true;
+  }
+}
+
 export const CLICK_EVENT_NAME: 'mousedown' /* | 'touchend' */ | 'click' = (IS_TOUCH_SUPPORTED ? 'mousedown' : 'click') as any;
-export type AttachClickOptions = AddEventListenerOptions & Partial<{listenerSetter: ListenerSetter, touchMouseDown: true}>;
+export type AttachClickOptions = AddEventListenerOptions & Partial<{listenerSetter: ListenerSetter, cancelMouseDown?: boolean, touchMouseDown: boolean, ignoreMove: boolean}>;
 export function attachClickEvent(elem: HTMLElement | Window, callback: (e: /* TouchEvent |  */MouseEvent) => void, options: AttachClickOptions = {}) {
   const add = options.listenerSetter ? options.listenerSetter.add(elem) : elem.addEventListener.bind(elem);
-  // const remove = options.listenerSetter ? options.listenerSetter.removeManual.bind(options.listenerSetter, elem) : elem.removeEventListener.bind(elem);
+  const remove = options.listenerSetter ? options.listenerSetter.removeManual.bind(options.listenerSetter, elem) : elem.removeEventListener.bind(elem);
 
   options.touchMouseDown = true;
   /* if(options.touchMouseDown && CLICK_EVENT_NAME === 'touchend') {
@@ -42,16 +57,36 @@ export function attachClickEvent(elem: HTMLElement | Window, callback: (e: /* To
   } else {
     add(CLICK_EVENT_NAME, callback, options);
   } */
+
+  if(options.cancelMouseDown) {
+    (elem as HTMLElement).setAttribute('cancel-mouse-down', '');
+    // (elem as any).cancelMouseDown = true;
+  }
+
+  if(CLICK_EVENT_NAME === 'click' && !options.ignoreMove) {
+    const cb = callback;
+    callback = (e) => {
+      if(hasMouseMovedSinceDown(e)) {
+        return;
+      }
+
+      cb(e);
+    };
+  }
+
   add(CLICK_EVENT_NAME, callback, options);
+
+  // @ts-ignore
+  return () => remove(CLICK_EVENT_NAME, callback, options);
 }
 
-export function detachClickEvent(elem: HTMLElement | Window, callback: (e: /* TouchEvent |  */MouseEvent) => void, options?: AddEventListenerOptions) {
-  // if(CLICK_EVENT_NAME === 'touchend') {
-  //   elem.removeEventListener('touchstart', callback, options);
-  // } else {
-  elem.removeEventListener(CLICK_EVENT_NAME, callback as any, options);
-  // }
-}
+// export function detachClickEvent(elem: HTMLElement | Window, callback: (e: /* TouchEvent |  */MouseEvent) => void, options?: AddEventListenerOptions) {
+//   // if(CLICK_EVENT_NAME === 'touchend') {
+//   //   elem.removeEventListener('touchstart', callback, options);
+//   // } else {
+//   elem.removeEventListener(CLICK_EVENT_NAME, callback as any, options);
+//   // }
+// }
 
 export function simulateClickEvent(elem: HTMLElement) {
   simulateEvent(elem, CLICK_EVENT_NAME);

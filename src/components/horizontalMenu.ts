@@ -4,7 +4,7 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {TransitionSlider} from './transition';
+import TransitionSlider from './transition';
 import {ScrollableX} from './scrollable';
 import rootScope from '../lib/rootScope';
 import {fastRaf} from '../helpers/schedulers';
@@ -13,17 +13,24 @@ import findUpAsChild from '../helpers/dom/findUpAsChild';
 import whichChild from '../helpers/dom/whichChild';
 import ListenerSetter from '../helpers/listenerSetter';
 import {attachClickEvent} from '../helpers/dom/clickEvent';
+import liteMode from '../helpers/liteMode';
 
 export function horizontalMenu(
   tabs: HTMLElement,
   content: HTMLElement,
   onClick?: (id: number, tabContent: HTMLDivElement, animate: boolean) => void | boolean | Promise<void | boolean>,
   onTransitionEnd?: () => void,
-  transitionTime = 250,
+  transitionTime = 200,
   scrollableX?: ScrollableX,
   listenerSetter?: ListenerSetter
 ) {
-  const selectTab = TransitionSlider(content, tabs || content.dataset.animation === 'tabs' ? 'tabs' : 'navigation', transitionTime, onTransitionEnd, undefined, listenerSetter);
+  const selectTab = TransitionSlider({
+    content,
+    type: tabs || content.dataset.animation === 'tabs' ? 'tabs' : 'navigation',
+    transitionTime,
+    onTransitionEnd,
+    listenerSetter
+  });
 
   if(!tabs) {
     return selectTab;
@@ -31,10 +38,17 @@ export function horizontalMenu(
 
   const proxy = new Proxy(selectTab, {
     apply: (target, that, args) => {
-      const id = +args[0];
       const animate = args[1] !== undefined ? args[1] : true;
 
-      const el = (tabs.querySelector(`[data-tab="${id}"]`) || tabs.children[id]) as HTMLElement;
+      let id: number, el: HTMLElement;
+      if(args[0] instanceof HTMLElement) {
+        id = whichChild(args[0]);
+        el = args[0];
+      } else {
+        id = +args[0];
+        el = (tabs.querySelector(`[data-tab="${id}"]`) || tabs.children[id]) as HTMLElement;
+      }
+
       selectTarget(el, id, animate);
     }
   });
@@ -60,7 +74,7 @@ export function horizontalMenu(
       });
     }
 
-    if(!rootScope.settings.animationsEnabled) {
+    if(!liteMode.isAvailable('animations')) {
       animate = false;
     }
 

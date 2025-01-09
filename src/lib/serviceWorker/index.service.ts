@@ -4,14 +4,10 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-// #if MTPROTO_SW
-import '../mtproto/mtproto.worker';
-// #endif
-
 import {logger, LogTypes} from '../logger';
 import {CACHE_ASSETS_NAME, requestCache} from './cache';
-import onStreamFetch from './stream';
-import {closeAllNotifications, onPing} from './push';
+import onStreamFetch, {toggleStreamInUse} from './stream';
+import {closeAllNotifications, onPing, onShownNotification} from './push';
 import CacheStorageController from '../files/cacheStorage';
 import {IS_SAFARI} from '../../environment/userAgent';
 import ServiceMessagePort from './serviceMessagePort';
@@ -19,6 +15,12 @@ import listenMessagePort from '../../helpers/listenMessagePort';
 import {getWindowClients} from '../../helpers/context';
 import {MessageSendPort} from '../mtproto/superMessagePort';
 import handleDownload from './download';
+import onShareFetch, {checkWindowClientForDeferredShare} from './share';
+import {onRtmpFetch, onRtmpLeftCall} from './rtmp';
+
+// #if MTPROTO_SW
+// import '../mtproto/mtproto.worker';
+// #endif
 
 export const log = logger('SW', LogTypes.Error | LogTypes.Debug | LogTypes.Log | LogTypes.Warn, true);
 const ctx = self as any as ServiceWorkerGlobalScope;
@@ -26,6 +28,17 @@ const ctx = self as any as ServiceWorkerGlobalScope;
 // #if !MTPROTO_SW
 let _mtprotoMessagePort: MessagePort;
 export const getMtprotoMessagePort = () => _mtprotoMessagePort;
+
+export const invokeVoidAll: ServiceMessagePort['invokeVoid'] = (...args) => {
+  getWindowClients().then((windowClients) => {
+    windowClients.forEach((windowClient) => {
+      // @ts-ignore
+      serviceMessagePort.invokeVoid(...args, windowClient);
+    });
+  });
+};
+
+log('init');
 
 const sendMessagePort = (source: MessageSendPort) => {
   const channel = new MessageChannel();
@@ -52,6 +65,8 @@ const onWindowConnected = (source: WindowClient) => {
   serviceMessagePort.invokeVoid('hello', undefined, source);
   sendMessagePortIfNeeded(source);
   connectedWindows.set(source.id, source);
+
+  checkWindowClientForDeferredShare(source);
 };
 
 export const serviceMessagePort = new ServiceMessagePort<false>();
@@ -68,7 +83,12 @@ serviceMessagePort.addMultipleEventsListeners({
 
   hello: (payload, source) => {
     onWindowConnected(source as any as WindowClient);
-  }
+  },
+
+  shownNotification: onShownNotification,
+  leaveRtmpCall: onRtmpLeftCall,
+
+  toggleStreamInUse
 });
 
 const {
@@ -110,30 +130,40 @@ listenMessagePort(serviceMessagePort, undefined, (source) => {
 // #endif
 
 const onFetch = (event: FetchEvent): void => {
-  // #if !DEBUG
   if(
+    import.meta.env.PROD &&
     !IS_SAFARI &&
     event.request.url.indexOf(location.origin + '/') === 0 &&
     event.request.url.match(/\.(js|css|jpe?g|json|wasm|png|mp3|svg|tgs|ico|woff2?|ttf|webmanifest?)(?:\?.*)?$/)
   ) {
     return event.respondWith(requestCache(event));
   }
-  // #endif
+
+  if(import.meta.env.DEV && event.request.url.match(/\.([jt]sx?|s?css)?($|\?)/)) {
+    return;
+  }
 
   try {
     // const [, url, scope, params] = /http[:s]+\/\/.*?(\/(.*?)(?:$|\/(.*)$))/.exec(event.request.url) || [];
-    const [scope, params] = event.request.url.split('/').slice(-2);
+    const [scope, _params] = event.request.url.split('/').slice(-2);
+    const [params, search] = _params.split('?');
 
-    // log.debug('[fetch]:', event);
+    // log.debug('[fetch]', event, event.request.url);
 
     switch(scope) {
       case 'stream': {
-        onStreamFetch(event, params);
+        onStreamFetch(event, params, search);
         break;
       }
 
+      case 'd':
       case 'download': {
         onDownloadFetch(event, params);
+        break;
+      }
+
+      case 'share': {
+        onShareFetch(event, params);
         break;
       }
 
@@ -141,6 +171,16 @@ const onFetch = (event: FetchEvent): void => {
         event.respondWith(new Response('pong'));
         break;
       }
+
+      case 'rtmp': {
+        onRtmpFetch(event, params, search);
+        break;
+      }
+
+      // default: {
+      //   event.respondWith(fetch(event.request));
+      //   break;
+      // }
     }
   } catch(err) {
     log.error('fetch error', err);

@@ -20,18 +20,8 @@ import {logger} from '../logger';
 import {State} from '../../config/state';
 import toggleStorages from '../../helpers/toggleStorages';
 import appTabsManager from '../appManagers/appTabsManager';
-import ServiceMessagePort from '../serviceWorker/serviceMessagePort';
 import callbackify from '../../helpers/callbackify';
-
-let _isServiceWorkerOnline = true;
-export function isServiceWorkerOnline() {
-  return _isServiceWorkerOnline;
-}
-
-let serviceMessagePort: ServiceMessagePort<true>, _serviceMessagePort: MessagePort;
-export function getServiceMessagePort() {
-  return _isServiceWorkerOnline ? serviceMessagePort : undefined;
-}
+import Modes from '../../config/modes';
 
 const log = logger('MTPROTO');
 // let haveState = false;
@@ -41,7 +31,9 @@ port.addMultipleEventsListeners({
   environment: (environment) => {
     setEnvironment(environment);
 
-    transportController.waitForWebSocket();
+    if(import.meta.env.VITE_MTPROTO_AUTO && Modes.multipleTransports) {
+      transportController.waitForWebSocket();
+    }
   },
 
   crypto: ({method, args}) => {
@@ -59,11 +51,14 @@ port.addMultipleEventsListeners({
     appStateManager.newVersion = newVersion;
     appStateManager.oldVersion = oldVersion;
 
-    (Object.keys(state) as any as (keyof State)[]).forEach((key) => {
-      appStateManager.pushToState(key, state[key], true, !pushedKeys.includes(key));
+    RESET_STORAGES_PROMISE.resolve({
+      storages: resetStorages,
+      callback: () => {
+        (Object.keys(state) as any as (keyof State)[]).forEach((key) => {
+          appStateManager.pushToState(key, state[key], true, !pushedKeys.includes(key));
+        });
+      }
     });
-
-    RESET_STORAGES_PROMISE.resolve(resetStorages);
     // haveState = true;
   },
 
@@ -77,29 +72,12 @@ port.addMultipleEventsListeners({
   },
 
   serviceWorkerOnline: (online) => {
-    _isServiceWorkerOnline = online;
+    appManagersManager.isServiceWorkerOnline = online;
   },
 
   serviceWorkerPort: (payload, source, event) => {
-    if(serviceMessagePort) {
-      serviceMessagePort.detachPort(_serviceMessagePort);
-      _serviceMessagePort = undefined;
-    } else {
-      serviceMessagePort = new ServiceMessagePort();
-      serviceMessagePort.addMultipleEventsListeners({
-        requestFilePart: (payload) => {
-          return callbackify(appManagersManager.getManagers(), (managers) => {
-            const {docId, dcId, offset, limit} = payload;
-            return managers.appDocsManager.requestDocPart(docId, dcId, offset, limit);
-          });
-        }
-      });
-    }
-
-    // * port can be undefined in the future
-    if(_serviceMessagePort = event.ports[0]) {
-      serviceMessagePort.attachPort(_serviceMessagePort);
-    }
+    appManagersManager.onServiceWorkerPort(event);
+    port.invokeVoid('receivedServiceMessagePort', undefined, source);
   },
 
   createObjectURL: (blob) => {
@@ -128,9 +106,19 @@ appManagersManager.start();
 appManagersManager.getManagers();
 appTabsManager.start();
 
+let isFirst = true;
 // let sentHello = false;
 listenMessagePort(port, (source) => {
   appTabsManager.addTab(source);
+  if(isFirst) {
+    isFirst = false;
+  } else {
+    callbackify(appManagersManager.getManagers(), (managers) => {
+      managers.thumbsStorage.mirrorAll(source);
+      managers.appPeersManager.mirrorAllPeers(source);
+      managers.appMessagesManager.mirrorAllMessages(source);
+    });
+  }
 
   // port.invokeVoid('hello', undefined, source);
   // if(!sentHello) {

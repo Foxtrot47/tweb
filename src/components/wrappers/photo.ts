@@ -6,7 +6,7 @@
 
 import renderMediaWithFadeIn from '../../helpers/dom/renderMediaWithFadeIn';
 import mediaSizes from '../../helpers/mediaSizes';
-import {Message, PhotoSize, VideoSize, WebDocument} from '../../layer';
+import {InputWebFileLocation, Message, PhotoSize, VideoSize, WebDocument} from '../../layer';
 import {MyDocument} from '../../lib/appManagers/appDocsManager';
 import {MyPhoto} from '../../lib/appManagers/appPhotosManager';
 import rootScope from '../../lib/rootScope';
@@ -14,7 +14,7 @@ import LazyLoadQueue from '../lazyLoadQueue';
 import ProgressivePreloader from '../preloader';
 import blur from '../../helpers/blur';
 import {AppManagers} from '../../lib/appManagers/managers';
-import getStrippedThumbIfNeeded from '../../helpers/getStrippedThumbIfNeeded';
+import getMediaThumbIfNeeded from '../../helpers/getStrippedThumbIfNeeded';
 import setAttachmentSize from '../../helpers/setAttachmentSize';
 import choosePhotoSize from '../../lib/appManagers/utils/photos/choosePhotoSize';
 import type {ThumbCache} from '../../lib/storages/thumbs';
@@ -23,18 +23,22 @@ import isWebDocument from '../../lib/appManagers/utils/webDocs/isWebDocument';
 import createVideo from '../../helpers/dom/createVideo';
 import noop from '../../helpers/noop';
 import {THUMB_TYPE_FULL} from '../../lib/mtproto/mtproto_config';
+import {Middleware} from '../../helpers/middleware';
+import liteMode from '../../helpers/liteMode';
+import isWebFileLocation from '../../lib/appManagers/utils/webFiles/isWebFileLocation';
+import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
 
-export default async function wrapPhoto({photo, message, container, boxWidth, boxHeight, withTail, isOut, lazyLoadQueue, middleware, size, withoutPreloader, loadPromises, autoDownloadSize, noBlur, noThumb, noFadeIn, blurAfter, managers = rootScope.managers}: {
-  photo: MyPhoto | MyDocument | WebDocument,
+export default async function wrapPhoto({photo, message, container, boxWidth, boxHeight, withTail, isOut, lazyLoadQueue, middleware, size, withoutPreloader, loadPromises, autoDownloadSize, noBlur, noThumb, noFadeIn, blurAfter, managers = rootScope.managers, processUrl, fadeInElement, onRender, onRenderFinish, useBlur, useRenderCache, canHaveVideoPlayer, uploadingFileName}: {
+  photo: MyPhoto | MyDocument | WebDocument | InputWebFileLocation,
   message?: Message.message | Message.messageService,
-  container: HTMLElement,
+  container?: HTMLElement,
   boxWidth?: number,
   boxHeight?: number,
   withTail?: boolean,
   isOut?: boolean,
-  lazyLoadQueue?: LazyLoadQueue,
-  middleware?: () => boolean,
-  size?: PhotoSize | VideoSize,
+  lazyLoadQueue?: LazyLoadQueue | false,
+  middleware?: Middleware,
+  size?: PhotoSize | Extract<VideoSize, VideoSize.videoSize>,
   withoutPreloader?: boolean,
   loadPromises?: Promise<any>[],
   autoDownloadSize?: number,
@@ -43,6 +47,14 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
   noFadeIn?: boolean,
   blurAfter?: boolean,
   managers?: AppManagers,
+  processUrl?: (url: string) => Promise<string>,
+  fadeInElement?: HTMLElement,
+  onRender?: () => void,
+  onRenderFinish?: () => void,
+  useBlur?: boolean | number,
+  useRenderCache?: boolean,
+  canHaveVideoPlayer?: boolean,
+  uploadingFileName?: string
 }) {
   const ret = {
     loadPromises: {
@@ -57,11 +69,30 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
     aspecter: null as HTMLElement
   };
 
+  if(!container) {
+    withoutPreloader = true;
+    lazyLoadQueue = undefined;
+  }
+
+  const isWebFile = isWebFileLocation(photo);
   const isDocument = photo._ === 'document';
+  const isImageFromDocument = isDocument && photo.mime_type.startsWith('image/') && !size;
   const isWebDoc = isWebDocument(photo);
-  if(!((photo as MyPhoto).sizes || (photo as MyDocument).thumbs) && !isWebDoc) {
+  if(
+    !((photo as MyPhoto).sizes || (photo as MyDocument).thumbs) &&
+    !isWebDoc &&
+    !isImageFromDocument &&
+    !isWebFile
+  ) {
     if(boxWidth && boxHeight && !size && isDocument) {
-      setAttachmentSize(photo, container, boxWidth, boxHeight, undefined, message);
+      setAttachmentSize({
+        photo,
+        element: container,
+        boxWidth,
+        boxHeight,
+        message: message as Message.message,
+        canHaveVideoPlayer
+      });
     }
 
     return ret;
@@ -74,7 +105,7 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
     if(boxHeight === undefined) boxHeight = mediaSizes.active.regular.height;
   }
 
-  container.classList.add('media-container');
+  container && container.classList.add('media-container');
   let aspecter = container;
 
   let isFit = true;
@@ -82,22 +113,29 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
   let thumbImage: HTMLImageElement | HTMLCanvasElement;
   // let image: HTMLImageElement;
   let cacheContext: ThumbCache;
-  const isGif = isDocument && photo.mime_type === 'image/gif' && !size;
   // if(withTail) {
   //   image = wrapMediaWithTail(photo, message, container, boxWidth, boxHeight, isOut);
   // } else {
 
-  if(boxWidth && boxHeight && !size) { // !album
-    const set = setAttachmentSize(photo, container, boxWidth, boxHeight, undefined, message, undefined, isGif ? {
-      _: 'photoSize',
-      w: photo.w,
-      h: photo.h,
-      size: photo.size,
-      type: THUMB_TYPE_FULL
-    } : undefined);
+  if(boxWidth && boxHeight && !size && !isWebFile && container) { // !album
+    const set = setAttachmentSize({
+      photo,
+      element: container,
+      boxWidth,
+      boxHeight,
+      message: message as Message.message,
+      photoSize: isImageFromDocument ? {
+        _: 'photoSize',
+        w: photo.w,
+        h: photo.h,
+        size: photo.size,
+        type: THUMB_TYPE_FULL
+      } : undefined,
+      canHaveVideoPlayer
+    });
     size = set.photoSize;
     isFit = set.isFit;
-    cacheContext = await managers.thumbsStorage.getCacheContext(photo, size.type);
+    cacheContext = apiManagerProxy.getCacheContext(photo, size.type);
 
     if(!isFit && !isWebDoc) {
       aspecter = document.createElement('div');
@@ -105,7 +143,13 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
       aspecter.style.width = set.size.width + 'px';
       aspecter.style.height = set.size.height + 'px';
 
-      const gotThumb = getStrippedThumbIfNeeded(photo, cacheContext, !noBlur, true);
+      const gotThumb = getMediaThumbIfNeeded({
+        photo,
+        cacheContext,
+        useBlur: useBlur !== undefined ? useBlur : !noBlur,
+        ignoreCache: true,
+        onlyStripped: true
+      });
       if(gotThumb) {
         loadThumbPromise = gotThumb.loadPromise;
         const thumbImage = gotThumb.image; // local scope
@@ -123,7 +167,7 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
           isOut,
           loadPromises,
           middleware,
-          withoutPreloader,
+          withoutPreloader: true,
           withTail,
           autoDownloadSize,
           noBlur,
@@ -141,15 +185,20 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
       container.append(aspecter);
     }
   } else {
-    if(!size) {
+    if(!size && !isWebFile) {
       size = choosePhotoSize(photo, boxWidth, boxHeight, true);
     }
 
-    cacheContext = await managers.thumbsStorage.getCacheContext(photo, size?.type);
+    cacheContext = apiManagerProxy.getCacheContext(photo, size?.type);
   }
 
-  if(!noThumb && !isWebDoc) {
-    const gotThumb = getStrippedThumbIfNeeded(photo, cacheContext, !noBlur);
+  if(!noThumb && !isWebDoc && !isWebFile && aspecter) {
+    const gotThumb = getMediaThumbIfNeeded({
+      photo,
+      cacheContext,
+      useBlur: useBlur !== undefined ? useBlur : !noBlur
+    });
+
     if(gotThumb) {
       loadThumbPromise = Promise.all([loadThumbPromise, gotThumb.loadPromise]);
       ret.loadPromises.thumb = ret.loadPromises.full = loadThumbPromise;
@@ -160,13 +209,15 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
   }
   // }
 
-  if(size?._ === 'photoSizeEmpty' && isDocument) {
+  ret.aspecter = aspecter;
+
+  if((size?._ === 'photoSizeEmpty' && isDocument) || (size as PhotoSize.photoStrippedSize)?.bytes) {
     return ret;
   }
 
   let media: HTMLVideoElement | HTMLImageElement;
   if(size?._ === 'videoSize') {
-    media = ret.images.full = createVideo();
+    media = ret.images.full = createVideo({middleware});
     media.autoplay = true;
     media.loop = true;
     media.muted = true;
@@ -178,10 +229,10 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
 
   // console.log('wrapPhoto downloaded:', photo, photo.downloaded, container);
 
-  const needFadeIn = (thumbImage || !cacheContext.downloaded) && rootScope.settings.animationsEnabled && !noFadeIn;
+  const needFadeIn = (thumbImage || !cacheContext.downloaded) && liteMode.isAvailable('animations') && !noFadeIn;
 
   let preloader: ProgressivePreloader;
-  const uploadingFileName = (message as Message.message)?.uploadingFileName;
+  uploadingFileName ??= (message as Message.message)?.uploadingFileName?.[0];
   if(!withoutPreloader) {
     if(!cacheContext.downloaded || uploadingFileName) {
       preloader = new ProgressivePreloader({
@@ -202,11 +253,11 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
     // const promise = isGif && !size ?
     //   managers.appDocsManager.downloadDoc(photo, /* undefined,  */lazyLoadQueue?.queueId) :
     //   managers.appPhotosManager.preloadPhoto(photo, size, lazyLoadQueue?.queueId, noAutoDownload);
-    const haveToDownload = isGif && !size;
+    const haveToDownload = isImageFromDocument && !size;
     const promise = appDownloadManager.downloadMediaURL({
       media: photo,
       thumb: size,
-      queueId: lazyLoadQueue?.queueId,
+      queueId: lazyLoadQueue && lazyLoadQueue.queueId,
       onlyCache: haveToDownload ? undefined : noAutoDownload
     });
 
@@ -214,11 +265,26 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
   };
 
   const renderOnLoad = (url: string) => {
-    return renderMediaWithFadeIn(container, media, url, needFadeIn, aspecter, thumbImage);
+    return renderMediaWithFadeIn({
+      container,
+      media,
+      url,
+      needFadeIn,
+      aspecter,
+      thumbImage,
+      fadeInElement,
+      onRender,
+      onRenderFinish,
+      useRenderCache
+    });
   };
 
   const onLoad = async(url: string) => {
     if(middleware && !middleware()) return;
+
+    if(processUrl) {
+      url = await processUrl(url);
+    }
 
     if(blurAfter) {
       const result = blur(url, 12);
@@ -233,6 +299,7 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
 
   let loadPromise: Promise<any>;
   const canAttachPreloader = (
+    !isWebFile &&
     (size as PhotoSize.photoSize).w >= 150 &&
     (size as PhotoSize.photoSize).h >= 150
   ) || noAutoDownload;
@@ -243,7 +310,7 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
     }
 
     const promise = getDownloadPromise();
-    const cacheContext = await managers.thumbsStorage.getCacheContext(photo, size?.type);
+    const cacheContext = apiManagerProxy.getCacheContext(photo, size?.type);
     if(
       preloader &&
       !cacheContext.downloaded &&
@@ -280,11 +347,11 @@ export default async function wrapPhoto({photo, message, container, boxWidth, bo
   }
 
   // const perf = performance.now();
-  await loadThumbPromise;
+  // ! do not uncomment this, won't be able to modify element before the thumb is loaded
+  // await loadThumbPromise;
   ret.loadPromises.thumb = loadThumbPromise;
   ret.loadPromises.full = loadPromise || Promise.resolve();
   ret.preloader = preloader;
-  ret.aspecter = aspecter;
 
   // const elapsedTime = performance.now() - perf;
   // if(elapsedTime > 4) {

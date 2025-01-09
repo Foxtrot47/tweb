@@ -9,8 +9,7 @@ import PrivacySection from '../../../privacySection';
 import {LangPackKey} from '../../../../lib/langPack';
 
 export default class AppPrivacyCallsTab extends SliderSuperTabEventable {
-  protected init() {
-    this.header.classList.add('with-border');
+  public init() {
     this.container.classList.add('privacy-tab', 'privacy-calls');
     this.setTitle('PrivacySettings.VoiceCalls');
 

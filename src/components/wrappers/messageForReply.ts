@@ -4,43 +4,71 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
+import partition from '../../helpers/array/partition';
 import assumeType from '../../helpers/assumeType';
+import {formatDate} from '../../helpers/date';
 import htmlToDocumentFragment from '../../helpers/dom/htmlToDocumentFragment';
 import {getRestrictionReason} from '../../helpers/restrictions';
 import escapeRegExp from '../../helpers/string/escapeRegExp';
 import limitSymbols from '../../helpers/string/limitSymbols';
-import {Message, DocumentAttribute} from '../../layer';
+import {Message, DocumentAttribute, DraftMessage} from '../../layer';
 import {MyDocument} from '../../lib/appManagers/appDocsManager';
 import {MyDraftMessage} from '../../lib/appManagers/appDraftsManager';
 import {MyMessage} from '../../lib/appManagers/appMessagesManager';
 import isMessageRestricted from '../../lib/appManagers/utils/messages/isMessageRestricted';
-import I18n, {LangPackKey, i18n, UNSUPPORTED_LANG_PACK_KEY} from '../../lib/langPack';
+import getPeerId from '../../lib/appManagers/utils/peers/getPeerId';
+import I18n, {LangPackKey, i18n, UNSUPPORTED_LANG_PACK_KEY, FormatterArguments} from '../../lib/langPack';
+import {SERVICE_PEER_ID} from '../../lib/mtproto/mtproto_config';
+import parseEntities from '../../lib/richTextProcessor/parseEntities';
 import sortEntities from '../../lib/richTextProcessor/sortEntities';
 import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
 import wrapPlainText from '../../lib/richTextProcessor/wrapPlainText';
-import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
+import wrapRichText, {WrapRichTextOptions} from '../../lib/richTextProcessor/wrapRichText';
+import wrapTextWithEntities from '../../lib/richTextProcessor/wrapTextWithEntities';
 import rootScope from '../../lib/rootScope';
-import wrapMessageActionTextNew from './messageActionTextNew';
+import {Modify} from '../../types';
+import Icon from '../icon';
+import TranslatableMessage from '../translatableMessage';
+import wrapMessageActionTextNew, {WrapMessageActionTextOptions} from './messageActionTextNew';
+import {wrapMessageGiveawayResults} from './messageActionTextNewUnsafe';
+import wrapPeerTitle from './peerTitle';
 
-export default async function wrapMessageForReply(message: MyMessage | MyDraftMessage, text: string, usingMids: number[], plain: true, highlightWord?: string, withoutMediaType?: boolean): Promise<string>;
-export default async function wrapMessageForReply(message: MyMessage | MyDraftMessage, text?: string, usingMids?: number[], plain?: false, highlightWord?: string, withoutMediaType?: boolean): Promise<DocumentFragment>;
-export default async function wrapMessageForReply(message: MyMessage | MyDraftMessage, text: string = (message as Message.message).message, usingMids?: number[], plain?: boolean, highlightWord?: string, withoutMediaType?: boolean): Promise<DocumentFragment | string> {
+export type WrapMessageForReplyOptions = Modify<WrapMessageActionTextOptions, {
+  message: MyMessage | MyDraftMessage
+}> & {
+  text?: string,
+  usingMids?: number[],
+  highlightWord?: string,
+  withoutMediaType?: boolean,
+  canTranslate?: boolean
+};
+
+export default async function wrapMessageForReply<T extends WrapMessageForReplyOptions>(
+  options: T
+): Promise<T['plain'] extends true ? string : DocumentFragment> {
+  options.text ??= (options.message as Message.message).message;
+  if(!options.plain && options.highlightWord) {
+    options.highlightWord = options.highlightWord.trim();
+  }
+
+  const {message, usingMids, plain, highlightWord, withoutMediaType} = options;
+
   const parts: (Node | string)[] = [];
 
-  let hasAlbumKey = false;
-  const addPart = (langKey: LangPackKey, part?: string | HTMLElement | DocumentFragment) => {
+  let hasGroupedKey = false;
+  const addPart = (langKey: LangPackKey, part?: string | HTMLElement | DocumentFragment, args?: FormatterArguments) => {
     if(langKey) {
-      if(part === undefined && hasAlbumKey) {
+      if(part === undefined && hasGroupedKey) {
         return;
       }
 
-      part = plain ? I18n.format(langKey, true) : i18n(langKey);
+      part = plain ? I18n.format(langKey, true, args) : i18n(langKey, args);
     }
 
     if(plain) {
       parts.push(part);
     } else {
-      const el = document.createElement('i');
+      const el = document.createElement('span');
       if(typeof(part) === 'string') el.innerHTML = part;
       else el.append(part);
       parts.push(el);
@@ -52,42 +80,50 @@ export default async function wrapMessageForReply(message: MyMessage | MyDraftMe
 
   const isRestricted = isMessageRestricted(message as any);
 
-  let entities = (message as Message.message).totalEntities;
+  const someRichTextOptions: WrapRichTextOptions = {
+    ...options,
+    noLinebreaks: true,
+    noLinks: true,
+    noTextFormat: true
+  };
+
+  let entities = (message as Message.message).totalEntities ?? (message as DraftMessage.draftMessage).entities;
   if((message as Message.message).media && !isRestricted) {
     assumeType<Message.message>(message);
-    let usingFullAlbum = true;
+    let usingFullGrouepd = true;
     if(message.grouped_id) {
       if(usingMids) {
         const mids = await appMessagesManager.getMidsByMessage(message);
         if(usingMids.length === mids.length) {
           for(const mid of mids) {
             if(!usingMids.includes(mid)) {
-              usingFullAlbum = false;
+              usingFullGrouepd = false;
               break;
             }
           }
         } else {
-          usingFullAlbum = false;
+          usingFullGrouepd = false;
         }
       }
 
-      if(usingFullAlbum) {
-        const albumText = await appMessagesManager.getAlbumText(message.grouped_id);
-        text = albumText.message;
-        entities = albumText.totalEntities;
+      if(usingFullGrouepd) {
+        const groupedText = await appMessagesManager.getGroupedText(message.grouped_id);
+        options.text = groupedText?.message || '';
+        entities = groupedText?.totalEntities || [];
 
         if(!withoutMediaType) {
           addPart('AttachAlbum');
-          hasAlbumKey = true;
+          hasGroupedKey = true;
         }
       }
     } else {
-      usingFullAlbum = false;
+      usingFullGrouepd = false;
     }
 
-    if((!usingFullAlbum && !withoutMediaType) || !text) {
+    let i = 1;
+    if((!usingFullGrouepd && !withoutMediaType) || !options.text) {
       const media = message.media;
-      switch(media._) {
+      switch(media?._) {
         case 'messageMediaPhoto':
           addPart('AttachPhoto');
           break;
@@ -95,7 +131,7 @@ export default async function wrapMessageForReply(message: MyMessage | MyDraftMe
           addPart(undefined, plain ? media.emoticon : wrapEmojiText(media.emoticon));
           break;
         case 'messageMediaVenue': {
-          text = media.title;
+          options.text = media.title;
           addPart('AttachLocation');
           break;
         }
@@ -106,8 +142,16 @@ export default async function wrapMessageForReply(message: MyMessage | MyDraftMe
           addPart('AttachLiveLocation');
           break;
         case 'messageMediaPoll':
-          const f = '📊' + ' ' + (media.poll.question || 'poll');
-          addPart(undefined, plain ? f : wrapEmojiText(f));
+          const pre = '📊' + ' ';
+          if(plain) {
+            const f = pre + media.poll.question.text;
+            addPart(undefined, f);
+          } else {
+            const textWithEntities = wrapTextWithEntities(media.poll.question);
+            const fragment = wrapRichText(textWithEntities.text, {...someRichTextOptions, entities: textWithEntities.entities});
+            fragment.prepend(wrapEmojiText(pre));
+            addPart(undefined, fragment);
+          }
           break;
         case 'messageMediaContact':
           addPart('AttachContact');
@@ -139,14 +183,14 @@ export default async function wrapMessageForReply(message: MyMessage | MyDraftMe
 
             // will combine two parts into one
             const p = parts.splice(i, 2);
-            if(plain) parts.push((p[0] as string) + (p[1] as string));
+            if(plain) parts.push((p[0] as string) + (p[1] ? p[1] as string : ''));
             else {
               const span = window.document.createElement('span');
               span.append(...p);
               parts.push(span);
             }
 
-            text = '';
+            options.text = '';
           } else if(document.type === 'audio') {
             const attribute = document.attributes.find((attribute) => attribute._ === 'documentAttributeAudio' && (attribute.title || attribute.performer)) as DocumentAttribute.documentAttributeAudio;
             const f = '🎵' + ' ' + (attribute ? [attribute.title, attribute.performer].filter(Boolean).join(' - ') : document.file_name);
@@ -159,7 +203,12 @@ export default async function wrapMessageForReply(message: MyMessage | MyDraftMe
         }
 
         case 'messageMediaInvoice': {
-          addPart(undefined, plain ? media.title : wrapEmojiText(media.title));
+          if(media.extended_media?._ === 'messageExtendedMediaPreview') {
+            addPart(undefined, plain ? media.description : wrapEmojiText(media.description));
+          } else {
+            addPart(undefined, plain ? media.title : wrapEmojiText(media.title));
+          }
+
           break;
         }
 
@@ -168,7 +217,74 @@ export default async function wrapMessageForReply(message: MyMessage | MyDraftMe
           break;
         }
 
+        case 'messageMediaStory': {
+          if(media.pFlags.via_mention) {
+            const storyPeerId = getPeerId(media.peer);
+            const isMyStory = storyPeerId === rootScope.myId;
+            addPart(
+              isMyStory ? 'StoryMentionYou' : 'StoryMention',
+              undefined,
+              [await wrapPeerTitle({peerId: isMyStory ? message.peerId : storyPeerId, plainText: plain})]
+            )
+          } else {
+            addPart('Story');
+          }
+
+          break;
+        }
+
+        // @ts-ignore
+        case 'inputMediaWebPage':
+        case 'messageMediaPhotoExternal':
+        case 'messageMediaDocumentExternal':
+        case 'messageMediaWebPage': {
+          break;
+        }
+
+        case 'messageMediaGiveaway': {
+          const date = formatDate(new Date(media.until_date * 1000));
+          addPart('Giveaway.ToBeSelectedFull', undefined, [i18n('Giveaway.ToBeSelected', [media.quantity, plain ? date.textContent : date])]);
+          break;
+        }
+
+        case 'messageMediaGiveawayResults': {
+          const {langPackKey, args} = wrapMessageGiveawayResults(media, plain);
+          addPart(langPackKey, undefined, args);
+          break;
+        }
+
+        case 'messageMediaPaidMedia': {
+          const extendedMedia = media.extended_media;
+          const [photos, videos] = partition(extendedMedia, (media) => {
+            if(media._ === 'messageExtendedMediaPreview') {
+              return media.video_duration === undefined;
+            }
+
+            return media.media._ === 'messageMediaPhoto';
+          });
+
+          if(!plain) {
+            i += 2;
+            addPart(undefined, Icon('star', 'xtr-icon'));
+            addPart(undefined, ' ');
+          }
+
+          const length = photos.length + videos.length;
+          if(length < 2) {
+            addPart(photos.length ? 'AttachPhoto' : 'AttachVideo');
+            break;
+          }
+
+          addPart(
+            photos.length && videos.length ? 'Media' : photos.length ? 'Photos' : 'Videos', undefined,
+            [length]
+          );
+          break;
+        }
+
         default:
+          addPart(UNSUPPORTED_LANG_PACK_KEY);
+          options.text = '';
           // messageText += media._;
           // /////appMessagesManager.log.warn('Got unknown media type!', message);
           break;
@@ -176,46 +292,48 @@ export default async function wrapMessageForReply(message: MyMessage | MyDraftMe
     }
 
     const length = parts.length;
-    for(let i = 1; i < length; i += 2) {
+    for(; i < length; i += 2) {
       parts.splice(i, 0, ', ');
     }
 
-    if(text && length) {
+    if(options.text && length) {
       parts.push(', ');
     }
   }
 
   if((message as Message.messageService).action) {
-    const actionWrapped = await wrapMessageActionTextNew((message as Message.messageService), plain);
+    const actionWrapped = await wrapMessageActionTextNew({
+      ...(options as Modify<typeof options, {message: Message.messageService}>),
+      noLinks: true,
+      noTextFormat: true
+    });
+
     if(actionWrapped) {
       addPart(undefined, actionWrapped);
     }
   }
 
   if(isRestricted) {
-    text = getRestrictionReason((message as Message.message).restriction_reason).text;
+    options.text = getRestrictionReason((message as Message.message).restriction_reason).text;
     entities = [];
   }
 
-  if(text) {
-    text = limitSymbols(text, 100);
+  if(options.text) {
+    options.text = limitSymbols(options.text, 100);
 
-    if(!entities) {
-      entities = [];
-    }
+    entities ??= parseEntities(options.text);
 
     if(plain) {
-      parts.push(wrapPlainText(text, entities));
+      parts.push(wrapPlainText(options.text, entities));
     } else {
       // let entities = parseEntities(text.replace(/\n/g, ' '));
 
       if(highlightWord) {
-        highlightWord = highlightWord.trim();
         let found = false;
         let match: any;
         const regExp = new RegExp(escapeRegExp(highlightWord), 'gi');
         entities = entities.slice(); // fix leaving highlight entity
-        while((match = regExp.exec(text)) !== null) {
+        while((match = regExp.exec(options.text)) !== null) {
           entities.push({_: 'messageEntityHighlight', length: highlightWord.length, offset: match.index});
           found = true;
         }
@@ -225,22 +343,53 @@ export default async function wrapMessageForReply(message: MyMessage | MyDraftMe
         }
       }
 
-      const messageWrapped = wrapRichText(text, {
-        noLinebreaks: true,
-        entities,
-        noLinks: true,
-        noTextFormat: true
-      });
+      if((message as Message.message).peerId === SERVICE_PEER_ID &&
+        (message as Message.message).fromId === (message as Message.message).peerId) {
+        const match = options.text.match(/[\d\-]{5,7}/);
+        if(match) {
+          entities = entities.slice();
+          entities.push({
+            _: 'messageEntitySpoiler',
+            offset: match.index,
+            length: match[0].length
+          });
 
-      parts.push(htmlToDocumentFragment(messageWrapped));
+          sortEntities(entities);
+        }
+      }
+
+      let what: DocumentFragment | HTMLElement;
+      if(options.canTranslate) {
+        what = TranslatableMessage({
+          peerId: (message as Message.message).peerId,
+          message: message as Message.message,
+          richTextOptions: someRichTextOptions,
+          middleware: options.middleware,
+          onTextWithEntities: (textWithEntities) => {
+            return {
+              ...textWithEntities,
+              text: limitSymbols(textWithEntities.text, 100)
+            };
+          }
+        });
+      } else {
+        what = wrapRichText(options.text, {
+          ...someRichTextOptions,
+          entities
+        });
+
+        what = htmlToDocumentFragment(what);
+      }
+
+      parts.push(what);
     }
   }
 
   if(plain) {
-    return parts.join('');
+    return parts.join('') as any;
   } else {
     const fragment = document.createDocumentFragment();
     fragment.append(...parts);
-    return fragment;
+    return fragment as any;
   }
 }

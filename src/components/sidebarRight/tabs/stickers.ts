@@ -10,7 +10,6 @@ import LazyLoadQueue from '../../lazyLoadQueue';
 import appImManager from '../../../lib/appManagers/appImManager';
 import PopupStickers from '../../popups/stickers';
 import animationIntersector from '../../animationIntersector';
-import {wrapSticker} from '../../wrappers';
 import appSidebarRight from '..';
 import {StickerSet, StickerSetCovered} from '../../../layer';
 import {i18n} from '../../../lib/langPack';
@@ -20,20 +19,25 @@ import forEachReverse from '../../../helpers/array/forEachReverse';
 import setInnerHTML from '../../../helpers/dom/setInnerHTML';
 import wrapEmojiText from '../../../lib/richTextProcessor/wrapEmojiText';
 import attachStickerViewerListeners from '../../stickerViewer';
+import wrapSticker from '../../wrappers/sticker';
+import PopupElement from '../../popups';
 
 export default class AppStickersTab extends SliderSuperTab {
   private inputSearch: InputSearch;
   private setsDiv: HTMLDivElement;
   private lazyLoadQueue: LazyLoadQueue;
 
-  protected init() {
+  public init() {
     this.container.id = 'stickers-container';
     this.container.classList.add('chatlist-container');
 
     this.lazyLoadQueue = new LazyLoadQueue();
 
-    this.inputSearch = new InputSearch('StickersTab.SearchPlaceholder', (value) => {
-      this.search(value);
+    this.inputSearch = new InputSearch({
+      placeholder: 'StickersTab.SearchPlaceholder',
+      onChange: (value) => {
+        this.search(value);
+      }
     });
 
     this.title.replaceWith(this.inputSearch.container);
@@ -48,7 +52,7 @@ export default class AppStickersTab extends SliderSuperTab {
       const sticker = findUpClassName(e.target, 'sticker-set-sticker');
       if(sticker) {
         const docId = sticker.dataset.docId;
-        appImManager.chat.input.sendMessageWithDocument(docId);
+        appImManager.chat.input.sendMessageWithDocument({document: docId, target: sticker});
         return;
       }
 
@@ -79,14 +83,18 @@ export default class AppStickersTab extends SliderSuperTab {
         });
       } else {
         this.managers.appStickersManager.getStickerSet({id, access_hash}).then((full) => {
-          new PopupStickers(full.set).show();
+          PopupElement.createPopup(PopupStickers, full.set).show();
         });
       }
     }, {listenerSetter: this.listenerSetter});
+
+    appSidebarRight.toggleSidebar(true).then(() => {
+      this.renderFeatured();
+    });
   }
 
   public onCloseAfterTimeout() {
-    this.setsDiv.innerHTML = '';
+    this.setsDiv.replaceChildren();
     animationIntersector.checkAnimations(undefined, 'STICKERS-SEARCH');
     return super.onCloseAfterTimeout();
   }
@@ -192,15 +200,6 @@ export default class AppStickersTab extends SliderSuperTab {
     div.append(header, stickersDiv);
 
     this.setsDiv.append(div);
-  }
-
-  public open() {
-    const ret = super.open();
-    appSidebarRight.toggleSidebar(true).then(() => {
-      this.renderFeatured();
-    });
-
-    return ret;
   }
 
   public renderFeatured() {

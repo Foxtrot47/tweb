@@ -8,13 +8,36 @@ import setInnerHTML from '../../helpers/dom/setInnerHTML';
 import {MediaSizeType} from '../../helpers/mediaSizes';
 import {Message} from '../../layer';
 import {AppManagers} from '../../lib/appManagers/managers';
+import getMediaDurationFromMessage from '../../lib/appManagers/utils/messages/getMediaDurationFromMessage';
 import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
 import {MediaSearchContext} from '../appMediaPlaybackController';
 import Chat from '../chat/chat';
 import LazyLoadQueue from '../lazyLoadQueue';
+import TranslatableMessage from '../translatableMessage';
 import wrapDocument from './document';
 
-export default async function wrapGroupedDocuments({albumMustBeRenderedFull, message, bubble, messageDiv, chat, loadPromises, autoDownloadSize, lazyLoadQueue, searchContext, useSearch, sizeType, managers}: {
+export default async function wrapGroupedDocuments({
+  albumMustBeRenderedFull,
+  message,
+  bubble,
+  messageDiv,
+  chat,
+  loadPromises,
+  autoDownloadSize,
+  lazyLoadQueue,
+  searchContext,
+  useSearch,
+  sizeType,
+  managers,
+  fontWeight,
+  fontSize,
+  richTextFragment,
+  richTextOptions,
+  canTranscribeVoice,
+  translatableParams,
+  factCheckBox,
+  isOut
+}: {
   albumMustBeRenderedFull: boolean,
   message: any,
   messageDiv: HTMLElement,
@@ -27,16 +50,25 @@ export default async function wrapGroupedDocuments({albumMustBeRenderedFull, mes
   searchContext?: MediaSearchContext,
   useSearch?: boolean,
   sizeType?: MediaSizeType,
-  managers?: AppManagers
+  managers?: AppManagers,
+  fontWeight?: number,
+  fontSize?: number,
+  richTextFragment?: DocumentFragment | HTMLElement,
+  richTextOptions?: Parameters<typeof wrapRichText>[1]
+  canTranscribeVoice?: boolean,
+  translatableParams: Parameters<typeof TranslatableMessage>[0],
+  factCheckBox?: HTMLElement,
+  isOut?: boolean
 }) {
   let nameContainer: HTMLElement;
-  const mids = albumMustBeRenderedFull ? await chat.getMidsByMid(message.mid) : [message.mid];
+  const {peerId} = message;
+  const mids = albumMustBeRenderedFull ? await chat.getMidsByMid(message.peerId, message.mid) : [message.mid];
   /* if(isPending) {
     mids.reverse();
   } */
 
-  const promises = mids.map(async(mid, idx) => {
-    const message = (await chat.getMessage(mid)) as Message.message;
+  const promises = mids.map(async(mid, idx, arr) => {
+    const message = chat.getMessageByPeer(peerId, mid) as Message.message;
     const div = await wrapDocument({
       message,
       loadPromises,
@@ -44,7 +76,11 @@ export default async function wrapGroupedDocuments({albumMustBeRenderedFull, mes
       lazyLoadQueue,
       searchContext,
       sizeType,
-      managers
+      managers,
+      fontWeight,
+      fontSize,
+      canTranscribeVoice,
+      isOut
     });
 
     const container = document.createElement('div');
@@ -55,16 +91,45 @@ export default async function wrapGroupedDocuments({albumMustBeRenderedFull, mes
     const wrapper = document.createElement('div');
     wrapper.classList.add('document-wrapper');
 
-    if(message.message) {
-      const messageDiv = document.createElement('div');
+    const isFirst = idx === 0;
+    const isLast = idx === (arr.length - 1);
+
+    if(isFirst) container.classList.add('is-first');
+    if(isLast) container.classList.add('is-last');
+    // if(!(isFirst && isLast)) container.classList.add('has-sibling');
+
+    let messageDiv: HTMLElement;
+    if(message.message || (isLast && factCheckBox)) {
+      messageDiv = document.createElement('div');
       messageDiv.classList.add('document-message');
+    }
 
-      const richText = wrapRichText(message.message, {
-        entities: message.totalEntities
-      });
+    if(message.message) {
+      let fragment = richTextFragment;
+      if(!fragment) {
+        if(translatableParams) {
+          fragment = TranslatableMessage({
+            ...translatableParams,
+            message,
+            richTextOptions: {
+              ...translatableParams.richTextOptions,
+              maxMediaTimestamp: getMediaDurationFromMessage(message)
+            }
+          });
+        } else {
+          fragment = wrapRichText(message.message, {
+            ...richTextOptions,
+            entities: message.totalEntities,
+            maxMediaTimestamp: getMediaDurationFromMessage(message)
+          });
+        }
+      }
 
-      setInnerHTML(messageDiv, richText);
-      wrapper.append(messageDiv);
+      setInnerHTML(messageDiv, fragment);
+    }
+
+    if(factCheckBox && messageDiv && isLast) {
+      messageDiv.append(factCheckBox);
     }
 
     if(mids.length > 1) {
@@ -79,7 +144,7 @@ export default async function wrapGroupedDocuments({albumMustBeRenderedFull, mes
       }
     }
 
-    wrapper.append(div);
+    wrapper.append(...[div, messageDiv].filter(Boolean));
     container.append(wrapper);
     return container;
   });

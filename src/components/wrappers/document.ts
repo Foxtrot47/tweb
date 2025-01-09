@@ -9,8 +9,9 @@ import {CancellablePromise} from '../../helpers/cancellablePromise';
 import {clearBadCharsAndTrim} from '../../helpers/cleanSearchText';
 import {formatFullSentTime} from '../../helpers/date';
 import {simulateClickEvent, attachClickEvent} from '../../helpers/dom/clickEvent';
-import replaceContent from '../../helpers/dom/replaceContent';
+import findUpClassName from '../../helpers/dom/findUpClassName';
 import formatBytes from '../../helpers/formatBytes';
+import liteMode from '../../helpers/liteMode';
 import {MediaSizeType} from '../../helpers/mediaSizes';
 import noop from '../../helpers/noop';
 import {Message, MessageMedia, WebPage} from '../../layer';
@@ -22,11 +23,13 @@ import getDownloadMediaDetails from '../../lib/appManagers/utils/download/getDow
 import choosePhotoSize from '../../lib/appManagers/utils/photos/choosePhotoSize';
 import {joinElementsWith} from '../../lib/langPack';
 import {MAX_FILE_SAVE_SIZE} from '../../lib/mtproto/mtproto_config';
+import apiManagerProxy from '../../lib/mtproto/mtprotoworker';
 import wrapPlainText from '../../lib/richTextProcessor/wrapPlainText';
 import rootScope from '../../lib/rootScope';
 import type {ThumbCache} from '../../lib/storages/thumbs';
 import {MediaSearchContext} from '../appMediaPlaybackController';
 import AudioElement from '../audio';
+import confirmationPopup from '../confirmationPopup';
 import LazyLoadQueue from '../lazyLoadQueue';
 import {MiddleEllipsisElement} from '../middleEllipsis';
 import ProgressivePreloader from '../preloader';
@@ -43,7 +46,7 @@ rootScope.addEventListener('document_downloading', (docId) => {
   });
 });
 
-export default async function wrapDocument({message, withTime, fontWeight, voiceAsMusic, showSender, searchContext, loadPromises, autoDownloadSize, lazyLoadQueue, sizeType, managers = rootScope.managers, cacheContext}: {
+export default async function wrapDocument({message, withTime, fontWeight, voiceAsMusic, showSender, searchContext, loadPromises, autoDownloadSize, lazyLoadQueue, sizeType, managers = rootScope.managers, cacheContext, fontSize, getSize, canTranscribeVoice, isOut, uploadingFileName}: {
   message: Message.message,
   withTime?: boolean,
   fontWeight?: number,
@@ -55,14 +58,20 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
   lazyLoadQueue?: LazyLoadQueue,
   sizeType?: MediaSizeType,
   managers?: AppManagers,
-  cacheContext?: ThumbCache
+  cacheContext?: ThumbCache,
+  fontSize?: number,
+  getSize?: () => number,
+  canTranscribeVoice?: boolean,
+  isOut?: boolean,
+  uploadingFileName?: string
 }): Promise<HTMLElement> {
-  if(!fontWeight) fontWeight = 500;
-  if(!sizeType) sizeType = '' as any;
+  fontWeight ??= 500;
+  sizeType ??= '' as any;
+  fontSize ??= 16;
   const noAutoDownload = autoDownloadSize === 0;
 
   const doc = ((message.media as MessageMedia.messageMediaDocument).document || ((message.media as MessageMedia.messageMediaWebPage).webpage as WebPage.webPage).document) as MyDocument;
-  const uploadFileName = message?.uploadingFileName;
+  uploadingFileName ??= message?.uploadingFileName?.[0];
   if(doc.type === 'audio' || doc.type === 'voice' || doc.type === 'round') {
     const audioElement = new AudioElement();
     audioElement.withTime = withTime;
@@ -70,13 +79,18 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
     audioElement.noAutoDownload = noAutoDownload;
     audioElement.lazyLoadQueue = lazyLoadQueue;
     audioElement.loadPromises = loadPromises;
+    audioElement.uploadingFileName = uploadingFileName;
+    if(canTranscribeVoice && doc.type === 'voice') audioElement.transcriptionState = 0;
+    (audioElement as any).getSize = getSize;
 
     if(voiceAsMusic) audioElement.voiceAsMusic = voiceAsMusic;
     if(searchContext) audioElement.searchContext = searchContext;
     if(showSender) audioElement.showSender = showSender;
 
     audioElement.dataset.fontWeight = '' + fontWeight;
+    audioElement.dataset.fontSize = '' + fontSize;
     audioElement.dataset.sizeType = sizeType;
+    if(isOut) audioElement.classList.add('is-out');
     await audioElement.render();
     return audioElement;
   }
@@ -100,10 +114,10 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
 
   const hadContext = !!cacheContext;
   const getCacheContext = () => {
-    return hadContext ? cacheContext : managers.thumbsStorage.getCacheContext(doc);
+    return hadContext ? cacheContext : apiManagerProxy.getCacheContext(doc);
   };
 
-  cacheContext = await getCacheContext();
+  cacheContext = getCacheContext();
   let hasThumb = false;
   if((doc.thumbs?.length || (message.pFlags.is_outgoing && cacheContext.url && doc.type === 'photo'))/*  && doc.mime_type !== 'image/gif' */) {
     docDiv.classList.add('document-with-thumb');
@@ -111,7 +125,7 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
 
     const imgs: (HTMLImageElement | HTMLCanvasElement | HTMLVideoElement)[] = [];
     // ! WARNING, use thumbs for check when thumb will be generated for media
-    if(message.pFlags.is_outgoing && ['photo', 'video'].includes(doc.type)) {
+    if(message.pFlags.is_outgoing && ['photo', 'video'].includes(doc.type) && cacheContext.url) {
       icoDiv.innerHTML = `<img src="${cacheContext.url}">`;
       imgs.push(icoDiv.firstElementChild as HTMLImageElement);
     } else {
@@ -169,7 +183,7 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
   }
 
   docDiv.innerHTML = `
-  ${(cacheContext.downloaded && !uploadFileName) || !message.mid || !hasThumb ? '' : `<div class="document-download"></div>`}
+  ${(cacheContext.downloaded && !uploadingFileName) || !message.mid || !hasThumb ? '' : `<div class="document-download"></div>`}
   <div class="document-name"></div>
   <div class="document-size"></div>
   `;
@@ -177,7 +191,9 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
   const nameDiv = docDiv.querySelector('.document-name') as HTMLElement;
   const middleEllipsisEl = new MiddleEllipsisElement();
   middleEllipsisEl.dataset.fontWeight = '' + fontWeight;
+  middleEllipsisEl.dataset.fontSize = '' + fontSize;
   middleEllipsisEl.dataset.sizeType = sizeType;
+  (middleEllipsisEl as any).getSize = getSize;
   middleEllipsisEl.textContent = fileName;
   // setInnerHTML(middleEllipsisEl, fileName);
 
@@ -198,15 +214,17 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
 
   docDiv.prepend(icoDiv);
 
-  if(!uploadFileName && message.pFlags.is_outgoing && !message.mid) {
+  if(!uploadingFileName && message.pFlags.is_outgoing && !message.mid) {
     return docDiv;
   }
+
+  const canSaveToCache = doc.size <= MAX_FILE_SAVE_SIZE;
 
   let downloadDiv: HTMLElement, preloader: ProgressivePreloader = null;
   const onLoad = () => {
     docDiv.classList.remove('downloading');
 
-    if(/* !hasThumb ||  */(doc.size > MAX_FILE_SAVE_SIZE && !uploadFileName)) {
+    if(/* !hasThumb ||  */(doc.size > MAX_FILE_SAVE_SIZE && !uploadingFileName)) {
       preloader.setManual();
       preloader.attach(downloadDiv);
       preloader.preloader.classList.add('manual');
@@ -214,7 +232,7 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
       return;
     }
 
-    if(doc.size <= MAX_FILE_SAVE_SIZE) {
+    if(canSaveToCache) {
       docDiv.classList.add('downloaded');
     }
 
@@ -272,21 +290,35 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
     const queueId = appImManager.chat.bubbles ? appImManager.chat.bubbles.lazyLoadQueue.queueId : undefined;
     if(!save) {
       download = appDownloadManager.downloadToDisc({media: doc, queueId}, true);
-    } else if(doc.type === 'pdf') {
+    } else if(doc.type === 'pdf' && false) {
       const canOpenAfter = /* managers.appDocsManager.downloading.has(doc.id) ||  */!preloader || preloader.detached;
       download = appDownloadManager.downloadMediaURL({media: doc, queueId});
       if(canOpenAfter) {
         download.then(() => {
           setTimeout(async() => { // wait for preloader animation end
-            const url = (await getCacheContext()).url;
+            const url = (getCacheContext()).url;
             window.open(url);
-          }, rootScope.settings.animationsEnabled ? 250 : 0);
+          }, liteMode.isAvailable('animations') ? 250 : 0);
         });
       }
-    } else if(MEDIA_MIME_TYPES_SUPPORTED.has(doc.mime_type) && doc.thumbs?.length) {
+    } else if(
+      MEDIA_MIME_TYPES_SUPPORTED.has(doc.mime_type) &&
+      doc.thumbs?.length &&
+      canSaveToCache
+    ) {
       download = appDownloadManager.downloadMediaURL({media: doc, queueId});
     } else {
       download = appDownloadManager.downloadToDisc({media: doc, queueId});
+
+      if(doc.mime_type === 'image/svg+xml') {
+        confirmationPopup({
+          descriptionLangKey: 'Chat.File.QuickLook.Svg',
+          button: {
+            langKey: 'OK',
+            isCancel: true
+          }
+        });
+      }
     }
 
     download.catch(() => {
@@ -308,13 +340,13 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
     preloader.attach(downloadDiv, false, promise);
     preloader.setDownloadFunction(load);
     addByteProgress(promise);
-  } else if(!cacheContext.downloaded || uploadFileName) {
+  } else if(!cacheContext.downloaded || uploadingFileName) {
     downloadDiv = docDiv.querySelector('.document-download') || icoDiv;
     preloader = new ProgressivePreloader({
-      isUpload: !!uploadFileName
+      isUpload: !!uploadingFileName
     });
 
-    if(!uploadFileName) {
+    if(!uploadingFileName) {
       preloader.construct();
       preloader.setManual();
       preloader.attach(downloadDiv);
@@ -324,7 +356,7 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
         simulateClickEvent(preloader.preloader);
       }
     } else {
-      const uploadPromise = appDownloadManager.getUpload(uploadFileName);
+      const uploadPromise = appDownloadManager.getUpload(uploadingFileName);
       preloader.attachPromise(uploadPromise);
       preloader.attach(downloadDiv);
       addByteProgress(uploadPromise);
@@ -332,6 +364,10 @@ export default async function wrapDocument({message, withTime, fontWeight, voice
   }
 
   attachClickEvent(docDiv, (e) => {
+    if(findUpClassName(e.target, 'time')) { // prevent downloading by clicking on time
+      return;
+    }
+
     if(preloader) {
       preloader.onClick(e);
     } else {

@@ -14,11 +14,14 @@ import SendContextMenu from '../chat/sendContextMenu';
 import I18n, {_i18n} from '../../lib/langPack';
 import findUpTag from '../../helpers/dom/findUpTag';
 import cancelEvent from '../../helpers/dom/cancelEvent';
-import getRichValue from '../../helpers/dom/getRichValue';
 import isInputEmpty from '../../helpers/dom/isInputEmpty';
 import whichChild from '../../helpers/dom/whichChild';
 import {attachClickEvent} from '../../helpers/dom/clickEvent';
 import {Poll} from '../../layer';
+import getRichValueWithCaret from '../../helpers/dom/getRichValueWithCaret';
+import confirmationPopup from '../confirmationPopup';
+import ButtonIcon from '../buttonIcon';
+import {ChatType} from '../chat/chat';
 
 const MAX_LENGTH_QUESTION = 255;
 const MAX_LENGTH_OPTION = 100;
@@ -37,9 +40,31 @@ export default class PopupCreatePoll extends PopupElement {
   private correctAnswers: Uint8Array[];
   private quizSolutionField: InputField;
   private optionInputFields: InputField[];
+  private sent: boolean;
 
   constructor(private chat: Chat) {
-    super('popup-create-poll popup-new-media', {closable: true, withConfirm: 'Create', body: true, title: 'NewPoll'});
+    super('popup-create-poll popup-new-media', {
+      closable: true,
+      overlayClosable: true,
+      withConfirm: 'Create',
+      body: true,
+      title: 'NewPoll',
+      isConfirmationNeededOnClose: () => {
+        if(!this.getFilledAnswers().length || this.sent) {
+          return;
+        }
+
+        return confirmationPopup({
+          titleLangKey: 'CancelPollAlertTitle',
+          descriptionLangKey: 'CancelPollAlertText',
+          button: {
+            langKey: 'Discard',
+            isDanger: true
+          }
+        });
+      }
+    });
+
     this.construct();
   }
 
@@ -57,7 +82,7 @@ export default class PopupCreatePoll extends PopupElement {
 
     this.optionInputFields = [];
 
-    if(this.chat.type !== 'scheduled') {
+    if(this.chat.type !== ChatType.Scheduled) {
       const sendMenu = new SendContextMenu({
         onSilentClick: () => {
           this.chat.input.sendSilent = true;
@@ -69,12 +94,14 @@ export default class PopupCreatePoll extends PopupElement {
           });
         },
         openSide: 'bottom-left',
-        onContextElement: this.btnConfirm
+        onContextElement: this.btnConfirm,
+        middleware: this.middlewareHelper.get(),
+        onRef: (element) => {
+          this.header.append(element);
+        }
       });
 
       sendMenu.setPeerId(this.chat.peerId);
-
-      this.header.append(sendMenu.sendMenu);
     }
 
     this.header.append(this.questionInputField.container);
@@ -113,12 +140,12 @@ export default class PopupCreatePoll extends PopupElement {
     });
 
     this.listenerSetter.add(this.multipleCheckboxField.input)('change', () => {
-      const checked = this.multipleCheckboxField.input.checked;
+      const checked = this.multipleCheckboxField.checked;
       this.quizCheckboxField.input.toggleAttribute('disabled', checked);
     });
 
     this.listenerSetter.add(this.quizCheckboxField.input)('change', () => {
-      const checked = this.quizCheckboxField.input.checked;
+      const checked = this.quizCheckboxField.checked;
 
       (Array.from(this.questions.children) as HTMLElement[]).map((el) => {
         el.classList.toggle('radio-field', checked);
@@ -176,17 +203,13 @@ export default class PopupCreatePoll extends PopupElement {
     this.scrollable = new Scrollable(this.body);
     this.appendMoreField();
 
-    this.onEscape = () => {
-      return !this.getFilledAnswers().length;
-    };
-
     this.handleChange();
   }
 
   private getFilledAnswers() {
     const answers = Array.from(this.questions.children).map((el, idx) => {
       const input = el.querySelector('.input-field-input') as HTMLElement;
-      return input instanceof HTMLInputElement ? input.value : getRichValue(input, false).value;
+      return input instanceof HTMLInputElement ? input.value : getRichValueWithCaret(input, false, false).value;
     }).filter((v) => !!v.trim());
 
     return answers;
@@ -206,7 +229,7 @@ export default class PopupCreatePoll extends PopupElement {
       return false;
     }
 
-    if(this.quizCheckboxField.input.checked && !this.correctAnswers?.length) {
+    if(this.quizCheckboxField.checked && !this.correctAnswers?.length) {
       return false;
     }
 
@@ -220,7 +243,7 @@ export default class PopupCreatePoll extends PopupElement {
       return false;
     }
 
-    const {value: quizSolution} = getRichValue(this.quizSolutionField.input, false);
+    const {value: quizSolution} = getRichValueWithCaret(this.quizSolutionField.input, false, false);
     if(quizSolution.length > MAX_LENGTH_SOLUTION) {
       return false;
     }
@@ -238,9 +261,9 @@ export default class PopupCreatePoll extends PopupElement {
 
     const answers = this.getFilledAnswers();
 
-    const {value: quizSolution, entities: quizSolutionEntities} = getRichValue(this.quizSolutionField.input);
+    const {value: quizSolution, entities: quizSolutionEntities} = getRichValueWithCaret(this.quizSolutionField.input, true, false);
 
-    if(this.chat.type === 'scheduled' && !force) {
+    if(this.chat.type === ChatType.Scheduled && !force) {
       this.chat.input.scheduleSending(() => {
         this.send(true);
       });
@@ -248,6 +271,7 @@ export default class PopupCreatePoll extends PopupElement {
       return;
     }
 
+    this.sent = true;
     this.hide();
 
     // const randomID = [nextRandomInt(0xFFFFFFFF), nextRandomInt(0xFFFFFFFF)];
@@ -255,26 +279,30 @@ export default class PopupCreatePoll extends PopupElement {
 
     const pFlags: Poll['pFlags'] = {};
 
-    if(this.anonymousCheckboxField && !this.anonymousCheckboxField.input.checked) {
+    if(this.anonymousCheckboxField && !this.anonymousCheckboxField.checked) {
       pFlags.public_voters = true;
     }
 
-    if(this.multipleCheckboxField.input.checked) {
+    if(this.multipleCheckboxField.checked) {
       pFlags.multiple_choice = true;
     }
 
-    if(this.quizCheckboxField.input.checked) {
+    if(this.quizCheckboxField.checked) {
       pFlags.quiz = true;
     }
 
     const poll: Poll = {
       _: 'poll',
       pFlags,
-      question,
+      question: {_: 'textWithEntities', text: question, entities: []},
       answers: answers.map((value, idx) => {
         return {
           _: 'pollAnswer',
-          text: value,
+          text: {
+            _: 'textWithEntities',
+            text: value,
+            entities: []
+          },
           option: new Uint8Array([idx])
         };
       }),
@@ -282,12 +310,18 @@ export default class PopupCreatePoll extends PopupElement {
     };
     // poll.id = randomIDS;
 
-    const inputMediaPoll = await this.chat.managers.appPollsManager.getInputMediaPoll(poll, this.correctAnswers, quizSolution, quizSolutionEntities);
+    const inputMediaPoll = await this.chat.managers.appPollsManager.getInputMediaPoll(
+      poll,
+      this.correctAnswers,
+      quizSolution,
+      quizSolutionEntities
+    );
 
     // console.log('Will try to create poll:', inputMediaPoll);
 
-    this.chat.managers.appMessagesManager.sendOther(this.chat.peerId, inputMediaPoll, {
-      ...this.chat.getMessageSendingParams()
+    this.chat.managers.appMessagesManager.sendOther({
+      ...this.chat.getMessageSendingParams(),
+      inputMedia: inputMediaPoll
     });
 
     if(this.chat.input.helperType === 'reply') {
@@ -358,7 +392,7 @@ export default class PopupCreatePoll extends PopupElement {
     attachClickEvent(questionField.input, cancelEvent, {listenerSetter: this.listenerSetter});
     radioField.label.classList.add('hidden-widget');
     radioField.input.disabled = true;
-    if(!this.quizCheckboxField.input.checked) {
+    if(!this.quizCheckboxField.checked) {
       radioField.label.classList.remove('radio-field');
     }
     this.listenerSetter.add(radioField.input)('change', () => {
@@ -370,8 +404,7 @@ export default class PopupCreatePoll extends PopupElement {
       }
     });
 
-    const deleteBtn = document.createElement('span');
-    deleteBtn.classList.add('btn-icon', 'tgico-close');
+    const deleteBtn = ButtonIcon('close');
     questionField.container.append(deleteBtn);
 
     attachClickEvent(deleteBtn, this.onDeleteClick, {listenerSetter: this.listenerSetter, once: true});

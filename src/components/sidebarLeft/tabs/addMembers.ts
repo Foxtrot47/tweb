@@ -17,7 +17,14 @@ export default class AppAddMembersTab extends SliderSuperTab {
   private takeOut: (peerIds: PeerId[]) => Promise<any> | false | void;
   private skippable: boolean;
 
-  protected init() {
+  public init(options: {
+    title: LangPackKey,
+    placeholder: LangPackKey,
+    type: AppAddMembersTab['peerType'],
+    takeOut?: AppAddMembersTab['takeOut'],
+    skippable: boolean,
+    selectedPeerIds?: PeerId[]
+  }) {
     this.container.classList.add('add-members-container');
     this.nextBtn = ButtonCorner({icon: 'arrow_next'});
     this.content.append(this.nextBtn);
@@ -25,20 +32,44 @@ export default class AppAddMembersTab extends SliderSuperTab {
 
     this.nextBtn.addEventListener('click', () => {
       const peerIds = this.selector.getSelected().map((sel) => sel.toPeerId());
+      const result = this.takeOut(peerIds);
 
-      if(this.skippable) {
-        this.takeOut(peerIds);
+      if(this.skippable && !(result instanceof Promise)) {
         this.close();
-      } else {
-        const promise = this.takeOut(peerIds);
-
-        if(promise instanceof Promise) {
-          this.attachToPromise(promise);
-        } else if(promise === undefined) {
-          this.close();
-        }
+      } else if(result instanceof Promise) {
+        this.attachToPromise(result);
+      } else if(result === undefined) {
+        this.close();
       }
     });
+
+    //
+    this.setTitle(options.title);
+    this.peerType = options.type;
+    this.takeOut = options.takeOut;
+    this.skippable = options.skippable;
+
+    const isPrivacy = this.peerType === 'privacy';
+    this.selector = new AppSelectPeers({
+      middleware: this.middlewareHelper.get(),
+      appendTo: this.content,
+      onChange: this.skippable ? null : (length) => {
+        this.nextBtn.classList.toggle('is-visible', !!length);
+      },
+      peerType: [isPrivacy ? 'dialogs' : 'contacts'],
+      placeholder: options.placeholder,
+      exceptSelf: isPrivacy,
+      filterPeerTypeBy: isPrivacy ? ['isAnyGroup', 'isUser'] : undefined,
+      managers: this.managers,
+      design: 'square'
+    });
+
+    if(options.selectedPeerIds) {
+      this.selector.addInitial(options.selectedPeerIds);
+    }
+
+    this.nextBtn.disabled = false;
+    this.nextBtn.classList.toggle('is-visible', this.skippable);
   }
 
   public attachToPromise(promise: Promise<any>) {
@@ -49,45 +80,5 @@ export default class AppAddMembersTab extends SliderSuperTab {
     }, () => {
       removeLoader();
     });
-  }
-
-  public open(options: {
-    title: LangPackKey,
-    placeholder: LangPackKey,
-    type: AppAddMembersTab['peerType'],
-    takeOut?: AppAddMembersTab['takeOut'],
-    skippable: boolean,
-    selectedPeerIds?: PeerId[]
-  }) {
-    const ret = super.open();
-
-    this.setTitle(options.title);
-    this.peerType = options.type;
-    this.takeOut = options.takeOut;
-    this.skippable = options.skippable;
-
-    const isPrivacy = this.peerType === 'privacy';
-    this.selector = new AppSelectPeers({
-      appendTo: this.content,
-      onChange: this.skippable ? null : (length) => {
-        this.nextBtn.classList.toggle('is-visible', !!length);
-      },
-      peerType: [isPrivacy ? 'dialogs' : 'contacts'],
-      placeholder: options.placeholder,
-      exceptSelf: isPrivacy,
-      filterPeerTypeBy: isPrivacy ? ['isAnyGroup', 'isUser'] : undefined,
-      managers: this.managers
-    });
-
-    if(options.selectedPeerIds) {
-      this.selector.addInitial(options.selectedPeerIds);
-    }
-
-    this.nextBtn.classList.add('tgico-arrow_next');
-    this.nextBtn.innerHTML = '';
-    this.nextBtn.disabled = false;
-    this.nextBtn.classList.toggle('is-visible', this.skippable);
-
-    return ret;
   }
 }

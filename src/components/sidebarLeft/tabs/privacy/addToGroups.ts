@@ -10,8 +10,7 @@ import {LangPackKey} from '../../../../lib/langPack';
 import PrivacyType from '../../../../lib/appManagers/utils/privacy/privacyType';
 
 export default class AppPrivacyAddToGroupsTab extends SliderSuperTabEventable {
-  protected init() {
-    this.header.classList.add('with-border');
+  public init() {
     this.container.classList.add('privacy-tab', 'privacy-add-to-groups');
     this.setTitle('PrivacySettings.Groups');
 
@@ -23,7 +22,7 @@ export default class AppPrivacyAddToGroupsTab extends SliderSuperTabEventable {
       captions: [caption, caption, caption],
       exceptionTexts: ['PrivacySettingsController.NeverAllow', 'PrivacySettingsController.AlwaysAllow'],
       appendTo: this.scrollable,
-      skipTypes: [PrivacyType.Nobody],
+      // skipTypes: [PrivacyType.Nobody],
       managers: this.managers
     });
   }

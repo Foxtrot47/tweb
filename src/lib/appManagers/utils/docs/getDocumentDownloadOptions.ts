@@ -8,12 +8,17 @@ import type {Document, PhotoSize, VideoSize} from '../../../../layer';
 import type {DownloadOptions} from '../../../mtproto/apiFileManager';
 import getDocumentInputFileLocation from './getDocumentInputFileLocation';
 
-export default function getDocumentDownloadOptions(doc: Document.document, thumb?: PhotoSize.photoSize | VideoSize, queueId?: number, onlyCache?: boolean): DownloadOptions {
+export default function getDocumentDownloadOptions(
+  doc: Document.document,
+  thumb?: PhotoSize.photoSize | Extract<VideoSize, VideoSize.videoSize>,
+  queueId?: number,
+  onlyCache?: boolean
+): DownloadOptions {
   const inputFileLocation = getDocumentInputFileLocation(doc, thumb?.type);
 
   let mimeType: MTMimeType;
   if(thumb?._ === 'photoSize') {
-    mimeType = doc.sticker ? 'image/webp' : 'image/jpeg'/* doc.mime_type */;
+    mimeType = doc.sticker ? 'image/webp' : (doc.mime_type.startsWith('image/') ? doc.mime_type : 'image/jpeg');
   } else {
     mimeType = doc.mime_type || 'application/octet-stream';
   }

@@ -4,18 +4,29 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {Message, MessageMedia, MessageEntity, MessageAction} from '../../../../layer';
-import matchUrl from '../../../richTextProcessor/matchUrl';
 import type {MyDocument} from '../../appDocsManager';
 import type {MyInputMessagesFilter, MyMessage} from '../../appMessagesManager';
+import {Message, MessageMedia, MessageEntity, MessageAction, Reaction} from '../../../../layer';
+import matchUrl from '../../../richTextProcessor/matchUrl';
+import reactionsEqual from '../reactions/reactionsEqual';
 
-export default function filterMessagesByInputFilter(inputFilter: MyInputMessagesFilter, history: Array<Message.message | Message.messageService>, limit: number) {
-  if(inputFilter === 'inputMessagesFilterEmpty') {
-    return history;
+export default function filterMessagesByInputFilter({
+  inputFilter,
+  messages,
+  limit,
+  savedReaction
+}: {
+  inputFilter: MyInputMessagesFilter,
+  messages: Array<Message.message | Message.messageService>,
+  limit: number,
+  savedReaction?: (Reaction.reactionEmoji | Reaction.reactionCustomEmoji)[]
+}) {
+  if(inputFilter === 'inputMessagesFilterEmpty' && !savedReaction) {
+    return messages.slice(0, limit);
   }
 
   const foundMsgs: MyMessage[] = [];
-  if(!history.length) {
+  if(!messages.length) {
     return foundMsgs;
   }
 
@@ -27,8 +38,8 @@ export default function filterMessagesByInputFilter(inputFilter: MyInputMessages
     url: boolean
   }> = {},
     neededDocTypes: MyDocument['type'][] = [],
-    excludeDocTypes: MyDocument['type'][] = []/* ,
-    neededFlags: string[] = [] */;
+    // excludeDocTypes: MyDocument['type'][] = [],
+    neededFlags: (keyof Message.message['pFlags'])[] = [];
 
   switch(inputFilter) {
     case 'inputMessagesFilterPhotos':
@@ -80,9 +91,9 @@ export default function filterMessagesByInputFilter(inputFilter: MyInputMessages
       neededContents['avatar'] = true;
       break;
 
-      /* case 'inputMessagesFilterPinned':
+    case 'inputMessagesFilterPinned':
       neededFlags.push('pinned');
-      break; */
+      break;
 
       /* case 'inputMessagesFilterMyMentions':
       neededContents['mentioned'] = true;
@@ -98,24 +109,26 @@ export default function filterMessagesByInputFilter(inputFilter: MyInputMessages
       }); */
   }
 
-  if(!filtering) {
+  if(!filtering && !savedReaction?.length) {
     return foundMsgs;
   }
 
-  for(let i = 0, length = history.length; i < length; ++i) {
-    const message: Message.message | Message.messageService = history[i];
+  for(let i = 0, length = messages.length; i < length; ++i) {
+    const message: Message.message | Message.messageService = messages[i];
     if(!message) continue;
 
     // || (neededContents['mentioned'] && message.totalEntities.find((e: any) => e._ === 'messageEntityMention'));
 
-    let found = false;
-    if(message._ === 'message') {
+    let found = !filtering;
+    if(neededFlags?.some((flag) => (message as any as Message.message).pFlags[flag])) {
+      found = true;
+    } else if(message._ === 'message') {
       if(message.media && neededContents[message.media._]/*  && !message.fwd_from */) {
         const doc = (message.media as MessageMedia.messageMediaDocument).document as MyDocument;
         if(doc &&
           (
-            (neededDocTypes.length && !neededDocTypes.includes(doc.type)) ||
-            excludeDocTypes.includes(doc.type)
+            (neededDocTypes.length && !neededDocTypes.includes(doc.type))/*  ||
+            excludeDocTypes.includes(doc.type) */
           )
         ) {
           continue;
@@ -128,24 +141,28 @@ export default function filterMessagesByInputFilter(inputFilter: MyInputMessages
           found = true;
         }
       }
-    } else if(neededContents['avatar'] &&
+
+      if(found && savedReaction) {
+        const results = message.reactions?.results;
+        found = results ? savedReaction.every((reaction) => {
+          return results.some((reactionCount) => reactionsEqual(reactionCount.reaction, reaction));
+        }) : false;
+      }
+    } else if(
+      neededContents['avatar'] &&
       message.action &&
       ([
         'messageActionChannelEditPhoto' as const,
         'messageActionChatEditPhoto' as const,
         'messageActionChannelEditVideo' as const,
         'messageActionChatEditVideo' as const
-      ] as MessageAction['_'][]).includes(message.action._)) {
+      ] as MessageAction['_'][]).includes(message.action._)
+    ) {
       found = true;
-    }/*  else if(neededFlags.find((flag) => message.pFlags[flag])) {
-      found = true;
-    } */
+    }
 
-    if(found) {
-      foundMsgs.push(message);
-      if(foundMsgs.length >= limit) {
-        break;
-      }
+    if(found && foundMsgs.push(message) >= limit) {
+      break;
     }
   }
 

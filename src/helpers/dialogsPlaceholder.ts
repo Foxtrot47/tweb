@@ -12,6 +12,7 @@ import roundRect from './canvas/roundRect';
 import Shimmer from './canvas/shimmer';
 import customProperties from './dom/customProperties';
 import easeInOutSine from './easing/easeInOutSine';
+import liteMode from './liteMode';
 import mediaSizes from './mediaSizes';
 
 export default class DialogsPlaceholder {
@@ -26,7 +27,11 @@ export default class DialogsPlaceholder {
   private availableLength: number;
 
   private avatarSize: number;
+  private avatarMarginRight: number;
   private marginVertical: number;
+  private marginLeft: number;
+  private gapVertical: number;
+  private totalHeight: number;
   private lineHeight: number;
   private lineBorderRadius: number;
   private lineMarginVertical: number;
@@ -37,37 +42,58 @@ export default class DialogsPlaceholder {
     statusWidth: number
   }[];
 
-  private getRectFrom: Element;
+  private getRectFrom: () => Pick<DOMRectEditable, 'width' | 'height'>;
   private onRemove: () => void;
   private blockScrollable: Scrollable;
 
-  constructor() {
+  private night: boolean;
+  private noSecondLine: boolean;
+
+  constructor(sizes: Partial<{
+    avatarSize: number,
+    avatarMarginRight: number,
+    marginVertical: number,
+    marginLeft: number,
+    lineMarginVertical: number,
+    gapVertical: number,
+    totalHeight: number,
+    statusWidth: number,
+    noSecondLine: boolean,
+    night: boolean
+  }> = {}) {
     this.shimmer = new Shimmer();
+    this.shimmer.night = this.night = sizes.night;
     this.tempId = 0;
     this.canvas = document.createElement('canvas');
     this.canvas.classList.add('dialogs-placeholder-canvas');
     this.ctx = this.canvas.getContext('2d');
 
     this.generatedValues = [];
-    this.avatarSize = 54;
-    this.marginVertical = 9;
+    this.avatarSize = sizes.avatarSize ?? 54;
+    this.avatarMarginRight = sizes.avatarMarginRight ?? 10;
+    this.marginVertical = sizes.marginVertical ?? 9;
+    this.marginLeft = sizes.marginLeft ?? 17;
+    this.gapVertical = sizes.gapVertical ?? 0;
+    this.totalHeight = sizes.totalHeight ?? (this.avatarSize + this.marginVertical * 2);
     this.lineHeight = 10;
     this.lineBorderRadius = 6;
-    this.lineMarginVertical = 8;
-    this.statusWidth = 24;
+    this.lineMarginVertical = sizes.lineMarginVertical ?? 8;
+    this.statusWidth = sizes.statusWidth ?? 24;
+    this.noSecondLine = sizes.noSecondLine;
   }
 
   public attach({container, rect, getRectFrom, onRemove, blockScrollable}: {
     container: HTMLElement,
-    rect?: {width: number, height: number},
-    getRectFrom?: HTMLElement,
+    rect?: ReturnType<DialogsPlaceholder['getRectFrom']>,
+    getRectFrom?: HTMLElement | DialogsPlaceholder['getRectFrom'],
     onRemove?: DialogsPlaceholder['onRemove'],
     blockScrollable?: DialogsPlaceholder['blockScrollable']
   }) {
     const {canvas} = this;
 
+    this.detachTime = undefined;
     this.onRemove = onRemove;
-    this.getRectFrom = getRectFrom || container;
+    this.getRectFrom = typeof(getRectFrom) === 'function' ? getRectFrom : (getRectFrom || container).getBoundingClientRect.bind(getRectFrom || container);
     if(this.blockScrollable = blockScrollable) {
       blockScrollable.container.style.overflowY = 'hidden';
     }
@@ -85,9 +111,15 @@ export default class DialogsPlaceholder {
     this.availableLength = availableLength;
     this.detachTime = Date.now();
 
-    if(!rootScope.settings.animationsEnabled) {
+    if(!liteMode.isAvailable('animations')) {
       this.remove();
     }
+  }
+
+  public removeWithoutUnmounting() {
+    this.stopAnimation();
+    this.onRemove?.();
+    this.onRemove = undefined;
   }
 
   public remove() {
@@ -96,19 +128,17 @@ export default class DialogsPlaceholder {
     if(this.canvas.parentElement) {
       this.canvas.remove();
 
-      if(this.onRemove) {
-        this.onRemove();
-        this.onRemove = undefined;
-      }
-
       if(this.blockScrollable) {
         this.blockScrollable.container.style.overflowY = '';
         this.blockScrollable = undefined;
       }
     }
+
+    this.onRemove?.();
+    this.onRemove = undefined;
   }
 
-  private updateCanvasSize(rect: {width: number, height: number} = this.getRectFrom.getBoundingClientRect()) {
+  private updateCanvasSize(rect = this.getRectFrom()) {
     const {canvas} = this;
     const dpr = canvas.dpr = window.devicePixelRatio;
     canvas.width = rect.width * dpr;
@@ -128,7 +158,7 @@ export default class DialogsPlaceholder {
 
     if(!detachTime) {
       return;
-    } else if(!rootScope.settings.animationsEnabled) {
+    } else if(!liteMode.isAvailable('animations')) {
       this.remove();
       return;
     }
@@ -215,7 +245,7 @@ export default class DialogsPlaceholder {
       }
 
       // ! should've removed the loop if animations are disabled
-      if(rootScope.settings.animationsEnabled) {
+      if(liteMode.isAvailable('animations')) {
         this.renderFrame();
       }
 
@@ -223,13 +253,13 @@ export default class DialogsPlaceholder {
       return middleware();
     });
 
-    rootScope.addEventListener('theme_change', this.onThemeChange);
+    rootScope.addEventListener('theme_changed', this.onThemeChange);
     mediaSizes.addEventListener('resize', this.onResize);
   }
 
   private stopAnimation() {
     ++this.tempId;
-    rootScope.removeEventListener('theme_change', this.onThemeChange);
+    rootScope.removeEventListener('theme_changed', this.onThemeChange);
     mediaSizes.removeEventListener('resize', this.onResize);
   }
 
@@ -260,16 +290,19 @@ export default class DialogsPlaceholder {
     patternCanvas.width = canvas.width;
     patternCanvas.height = canvas.height;
 
-    patternContext.fillStyle = customProperties.getProperty('surface-color');
+    patternContext.fillStyle = customProperties.getProperty('surface-color', this.night);
     patternContext.fillRect(0, 0, patternCanvas.width, patternCanvas.height);
 
     patternContext.fillStyle = '#000';
     patternContext.globalCompositeOperation = 'destination-out';
 
-    const dialogHeight = this.dialogHeight = (this.avatarSize + this.marginVertical * 2) * dpr;
+    const dialogHeight = this.dialogHeight = this.totalHeight * dpr;
+    const gapVertical = this.gapVertical * dpr;
+    let gapVerticalSum = 0;
     const length = this.length = Math.ceil(canvas.height / dialogHeight);
     for(let i = 0; i < length; ++i) {
-      this.drawChat(patternContext, i, i * dialogHeight);
+      this.drawChat(patternContext, i, i * dialogHeight + gapVerticalSum);
+      gapVerticalSum += gapVertical;
     }
 
     return ctx.createPattern(patternCanvas, 'no-repeat');
@@ -280,8 +313,8 @@ export default class DialogsPlaceholder {
     if(!generatedValues) {
       generatedValues = this.generatedValues[i] = {
         firstLineWidth: 40 + Math.random() * 100, // 120
-        secondLineWidth: 120 + Math.random() * 130, // 240
-        statusWidth: 24 + Math.random() * 16
+        secondLineWidth: this.noSecondLine ? 0 : 120 + Math.random() * 130, // 240
+        statusWidth: this.statusWidth ? this.statusWidth + Math.random() * 16 : undefined
       };
     }
 
@@ -303,13 +336,18 @@ export default class DialogsPlaceholder {
       lineMarginVertical
     } = this;
 
-    let marginLeft = 17;
-    drawCircleFromStart(ctx, marginLeft, y + marginVertical, avatarSize / 2, true);
+    let marginLeft = this.marginLeft;
 
-    marginLeft += avatarSize + 10;
+    if(avatarSize) {
+      drawCircleFromStart(ctx, marginLeft, y + marginVertical, avatarSize / 2, true);
+      marginLeft += avatarSize + this.avatarMarginRight;
+    }
+
+    // 9 + 54 - 10 - 8 = 45 ........ 72 - 9 - 10 - 8
     roundRect(ctx, marginLeft, y + marginVertical + lineMarginVertical, firstLineWidth, lineHeight, lineBorderRadius, true);
-    roundRect(ctx, marginLeft, y + marginVertical + avatarSize - lineHeight - lineMarginVertical, secondLineWidth, lineHeight, lineBorderRadius, true);
+    // roundRect(ctx, marginLeft, y + marginVertical + avatarSize - lineHeight - lineMarginVertical, secondLineWidth, lineHeight, lineBorderRadius, true);
+    secondLineWidth && roundRect(ctx, marginLeft, y + this.totalHeight - marginVertical - lineHeight - lineMarginVertical, secondLineWidth, lineHeight, lineBorderRadius, true);
 
-    roundRect(ctx, canvas.width / dpr - 24 - statusWidth, y + marginVertical + lineMarginVertical, statusWidth, lineHeight, lineBorderRadius, true);
+    statusWidth && roundRect(ctx, canvas.width / dpr - 24 - statusWidth, y + marginVertical + lineMarginVertical, statusWidth, lineHeight, lineBorderRadius, true);
   }
 }

@@ -4,10 +4,9 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {SettingSection} from '..';
 import Row from '../../row';
 import CheckboxField from '../../checkboxField';
-import {InputNotifyPeer, Update} from '../../../layer';
+import {InputNotifyPeer, InputPeerNotifySettings, Update} from '../../../layer';
 import {SliderSuperTabEventable} from '../../sliderTab';
 import rootScope from '../../../lib/rootScope';
 import {LangPackKey} from '../../../lib/langPack';
@@ -15,13 +14,14 @@ import copy from '../../../helpers/object/copy';
 import convertKeyToInputKey from '../../../helpers/string/convertKeyToInputKey';
 import {MUTE_UNTIL} from '../../../lib/mtproto/mtproto_config';
 import apiManagerProxy from '../../../lib/mtproto/mtprotoworker';
+import SettingSection from '../../settingSection';
+import {joinDeepPath} from '../../../helpers/object/setDeepProperty';
 
-type InputNotifyKey = Exclude<InputNotifyPeer['_'], 'inputNotifyPeer'>;
+type InputNotifyKey = Exclude<InputNotifyPeer['_'], 'inputNotifyPeer' | 'inputNotifyForumTopic'>;
 
 export default class AppNotificationsTab extends SliderSuperTabEventable {
-  protected init() {
-    this.header.classList.add('with-border');
-    this.container.classList.add('notifications-container', 'with-border');
+  public init() {
+    this.container.classList.add('notifications-container');
     this.setTitle('Telegram.NotificationSettingsViewController');
 
     const NotifySection = (options: {
@@ -36,13 +36,15 @@ export default class AppNotificationsTab extends SliderSuperTabEventable {
       const enabledRow = new Row({
         checkboxField: new CheckboxField({text: options.typeText, checked: true}),
         subtitleLangKey: 'Loading',
-        listenerSetter: this.listenerSetter
+        listenerSetter: this.listenerSetter,
+        withCheckboxSubtitle: true
       });
 
       const previewEnabledRow = new Row({
         checkboxField: new CheckboxField({text: 'MessagePreview', checked: true}),
         subtitleLangKey: 'Loading',
-        listenerSetter: this.listenerSetter
+        listenerSetter: this.listenerSetter,
+        withCheckboxSubtitle: true
       });
 
       section.content.append(enabledRow.container, previewEnabledRow.container);
@@ -70,7 +72,7 @@ export default class AppNotificationsTab extends SliderSuperTabEventable {
             return;
           }
 
-          const inputSettings: any = copy(notifySettings);
+          const inputSettings: InputPeerNotifySettings = copy(notifySettings) as any;
           inputSettings._ = 'inputPeerNotifySettings';
           inputSettings.mute_until = mute ? MUTE_UNTIL : 0;
           inputSettings.show_previews = showPreviews;
@@ -114,13 +116,20 @@ export default class AppNotificationsTab extends SliderSuperTabEventable {
       const contactsSignUpRow = new Row({
         checkboxField: new CheckboxField({text: 'ContactJoined', checked: true}),
         subtitleLangKey: 'Loading',
-        listenerSetter: this.listenerSetter
+        listenerSetter: this.listenerSetter,
+        withCheckboxSubtitle: true
       });
 
       const soundRow = new Row({
-        checkboxField: new CheckboxField({text: 'Notifications.Sound', checked: true, stateKey: 'settings.notifications.sound', listenerSetter: this.listenerSetter}),
+        checkboxField: new CheckboxField({
+          text: 'Notifications.Sound',
+          checked: true,
+          stateKey: joinDeepPath('settings', 'notifications', 'sound'),
+          listenerSetter: this.listenerSetter
+        }),
         subtitleLangKey: 'Loading',
-        listenerSetter: this.listenerSetter
+        listenerSetter: this.listenerSetter,
+        withCheckboxSubtitle: true
       });
 
       apiManagerProxy.getState().then((state) => {

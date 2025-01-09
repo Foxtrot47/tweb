@@ -4,29 +4,37 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
+import type {PushNotificationObject} from '../serviceWorker/push';
 import getPeerTitle from '../../components/wrappers/getPeerTitle';
 import wrapMessageForReply from '../../components/wrappers/messageForReply';
 import {MOUNT_CLASS_TO} from '../../config/debug';
 import {FontFamily} from '../../config/font';
+import {NOTIFICATION_BADGE_PATH, NOTIFICATION_ICON_PATH} from '../../config/notifications';
 import {IS_MOBILE} from '../../environment/userAgent';
 import IS_VIBRATE_SUPPORTED from '../../environment/vibrateSupport';
 import deferredPromise, {CancellablePromise} from '../../helpers/cancellablePromise';
+import drawCircle from '../../helpers/canvas/drawCircle';
+import customProperties from '../../helpers/dom/customProperties';
 import idleController from '../../helpers/idleController';
 import deepEqual from '../../helpers/object/deepEqual';
 import tsNow from '../../helpers/tsNow';
-import {Message, MessagePeerReaction, PeerNotifySettings} from '../../layer';
+import {Message, MessagePeerReaction, PeerNotifySettings, Reaction} from '../../layer';
 import I18n, {FormatterArguments, LangPackKey} from '../langPack';
 import apiManagerProxy from '../mtproto/mtprotoworker';
 import singleInstance from '../mtproto/singleInstance';
 import webPushApiManager, {PushSubscriptionNotify} from '../mtproto/webPushApiManager';
 import fixEmoji from '../richTextProcessor/fixEmoji';
+import getAbbreviation from '../richTextProcessor/getAbbreviation';
 import wrapPlainText from '../richTextProcessor/wrapPlainText';
 import rootScope from '../rootScope';
 import appImManager from './appImManager';
 import appRuntimeManager from './appRuntimeManager';
 import {AppManagers} from './managers';
-import generateMessageId from './utils/messageId/generateMessageId';
+import getMessageThreadId from './utils/messages/getMessageThreadId';
+import {getPeerAvatarColorByPeer} from './utils/peers/getPeerColorById';
 import getPeerId from './utils/peers/getPeerId';
+import {logger} from '../logger';
+import LazyLoadQueueBase from '../../components/lazyLoadQueueBase';
 
 type MyNotification = Notification & {
   hidden?: boolean,
@@ -63,7 +71,7 @@ export class UiNotificationsManager {
   private nextSoundAt: number;
   private prevSoundVolume: number;
 
-  private faviconEl: HTMLLinkElement = document.head.querySelector('link[rel="icon"]');
+  private faviconElements = Array.from(document.head.querySelectorAll<HTMLLinkElement>('link[rel="icon"], link[rel="alternate icon"]'));
 
   private titleBackup = document.title;
   private titleChanged = false;
@@ -84,12 +92,23 @@ export class UiNotificationsManager {
   private managers: AppManagers;
   private setAppBadge: (contents?: any) => Promise<void>;
 
+  private avatarCanvas: HTMLCanvasElement;
+  private avatarContext: CanvasRenderingContext2D;
+  private avatarGradients: {[color: string]: CanvasGradient};
+
+  private log: ReturnType<typeof logger>;
+
+  private notificationsQueue: LazyLoadQueueBase;
+
   construct(managers: AppManagers) {
     this.managers = managers;
 
+    this.log = logger('NOTIFICATIONS');
+    this.notificationsQueue = new LazyLoadQueueBase(1);
+
     navigator.vibrate = navigator.vibrate || (navigator as any).mozVibrate || (navigator as any).webkitVibrate;
-    this.setAppBadge = (navigator as any).setAppBadge && (navigator as any).setAppBadge.bind(navigator);
-    this.setAppBadge && this.setAppBadge(0);
+    this.setAppBadge = (navigator as any).setAppBadge?.bind(navigator);
+    this.setAppBadge?.(0);
 
     this.notificationsUiSupport = ('Notification' in window) || ('mozNotification' in navigator);
 
@@ -194,27 +213,45 @@ export class UiNotificationsManager {
 
       const peerId = notificationData.custom && notificationData.custom.peerId.toPeerId();
       console.log('click', notificationData, peerId);
-      if(peerId) {
-        this.topMessagesDeferred.then(async() => {
-          if(notificationData.custom.channel_id &&
-              !(await this.managers.appChatsManager.hasChat(notificationData.custom.channel_id))) {
-            return;
-          }
-
-          if(peerId.isUser() && !(await this.managers.appUsersManager.hasUser(peerId))) {
-            return;
-          }
-
-          appImManager.setInnerPeer({
-            peerId,
-            lastMsgId: generateMessageId(+notificationData.custom.msg_id)
-          });
-        });
+      if(!peerId) {
+        return;
       }
+
+      this.topMessagesDeferred.then(async() => {
+        const chatId = peerId.isAnyChat() ? peerId.toChatId() : undefined;
+        let channelId: ChatId;
+        if(chatId) {
+          if(!(await this.managers.appChatsManager.hasChat(chatId))) {
+            return;
+          }
+
+          channelId = await this.managers.appChatsManager.isChannel(chatId) ? chatId : undefined;
+        }
+
+        if(!chatId && !(await this.managers.appUsersManager.hasUser(peerId.toUserId()))) {
+          return;
+        }
+
+        appImManager.setInnerPeer({
+          peerId,
+          lastMsgId: await this.managers.appMessagesIdsManager.generateMessageId(+notificationData.custom.msg_id, channelId)
+        });
+      });
     });
   }
 
-  public async buildNotification({message, fwdCount, peerReaction, peerTypeNotifySettings}: {
+  public async buildNotificationQueue(options: Parameters<UiNotificationsManager['buildNotification']>[0]) {
+    this.notificationsQueue.push({
+      load: () => this.buildNotification(options)
+    });
+  }
+
+  public async buildNotification({
+    message,
+    fwdCount,
+    peerReaction,
+    peerTypeNotifySettings
+  }: {
     message: Message.message | Message.messageService,
     fwdCount?: number,
     peerReaction?: MessagePeerReaction,
@@ -223,19 +260,31 @@ export class UiNotificationsManager {
     const peerId = message.peerId;
     const isAnyChat = peerId.isAnyChat();
     const notification: NotifyOptions = {};
-    const peerString = await this.managers.appPeersManager.getPeerString(peerId);
+    const [peerString, isForum = false, peer] = await Promise.all([
+      this.managers.appPeersManager.getPeerString(peerId),
+      isAnyChat && this.managers.appPeersManager.isForum(peerId),
+      apiManagerProxy.getPeer(peerId)
+    ]);
     let notificationMessage: string;
+    let wrappedMessage = false;
 
     if(peerTypeNotifySettings.show_previews) {
       if(message._ === 'message' && message.fwd_from && fwdCount > 1) {
         notificationMessage = I18n.format('Notifications.Forwarded', true, [fwdCount]);
       } else {
-        notificationMessage = await wrapMessageForReply(message, undefined, undefined, true);
+        notificationMessage = await wrapMessageForReply({message, plain: true});
 
-        if(peerReaction) {
+        const reaction = peerReaction?.reaction;
+        if(reaction && reaction._ !== 'reactionEmpty') {
+          let emoticon = (reaction as Reaction.reactionEmoji).emoticon;
+          if(!emoticon) {
+            const doc = await this.managers.appEmojiManager.getCustomEmojiDocument((reaction as Reaction.reactionCustomEmoji).document_id);
+            emoticon = doc.stickerEmojiRaw;
+          }
+
           const langPackKey: LangPackKey = /* isAnyChat ? 'Notification.Group.Reacted' :  */'Notification.Contact.Reacted';
           const args: FormatterArguments = [
-            fixEmoji(peerReaction.reaction), // can be plain heart
+            fixEmoji(emoticon), // can be plain heart
             notificationMessage
           ];
 
@@ -244,6 +293,8 @@ export class UiNotificationsManager {
           } */
 
           notificationMessage = I18n.format(langPackKey, true, args);
+        } else {
+          wrappedMessage = true;
         }
       }
     } else {
@@ -255,10 +306,24 @@ export class UiNotificationsManager {
       notification.silent = true;
     }
 
+    const peerTitleOptions/* : Partial<Parameters<typeof getPeerTitle>[0]> */ = {
+      plainText: true as const,
+      managers: this.managers
+    };
+
+    const threadId = isForum ? getMessageThreadId(message, isForum) : undefined;
     const notificationFromPeerId = peerReaction ? getPeerId(peerReaction.peer_id) : message.fromId;
-    notification.title = await getPeerTitle(peerId, true, undefined, undefined, this.managers);
-    if(isAnyChat && notificationFromPeerId !== message.peerId) {
-      notification.title = await getPeerTitle(notificationFromPeerId, true, undefined, undefined, this.managers) +
+    const peerTitle = notification.title = await getPeerTitle({...peerTitleOptions, peerId, threadId: threadId});
+    if(isForum) {
+      const peerTitle = await getPeerTitle({...peerTitleOptions, peerId});
+      notification.title += ` (${peerTitle})`;
+
+      if(wrappedMessage && notificationFromPeerId !== message.peerId) {
+        notificationMessage = await getPeerTitle({...peerTitleOptions, peerId: notificationFromPeerId}) +
+          ': ' + notificationMessage;
+      }
+    } else if(isAnyChat && notificationFromPeerId !== message.peerId) {
+      notification.title = await getPeerTitle({...peerTitleOptions, peerId: notificationFromPeerId}) +
         ' @ ' +
         notification.title;
     }
@@ -266,7 +331,7 @@ export class UiNotificationsManager {
     notification.title = wrapPlainText(notification.title);
 
     notification.onclick = () => {
-      appImManager.setInnerPeer({peerId, lastMsgId: message.mid});
+      appImManager.setInnerPeer({peerId, lastMsgId: message.mid, threadId});
     };
 
     notification.message = notificationMessage;
@@ -276,15 +341,74 @@ export class UiNotificationsManager {
 
     const peerPhoto = await this.managers.appPeersManager.getPeerPhoto(peerId);
     if(peerPhoto) {
-      this.managers.appAvatarsManager.loadAvatar(peerId, peerPhoto, 'photo_small').then((url) => {
-        // ! WARNING, message can be already read
-        if(message.pFlags.unread || peerReaction) {
-          notification.image = url;
-          this.notify(notification);
-        }
-      });
+      const url = await this.managers.appAvatarsManager.loadAvatar(peerId, peerPhoto, 'photo_small');
+
+      if(!peerReaction) { // ! WARNING, message can be already read
+        message = await this.managers.appMessagesManager.getMessageByPeer(message.peerId, message.mid);
+        if(!message || !message.pFlags.unread) return;
+      }
+
+      notification.image = url;
     } else {
-      this.notify(notification);
+      let {avatarCanvas, avatarContext} = this;
+      if(!this.avatarCanvas) {
+        avatarCanvas = this.avatarCanvas = document.createElement('canvas');
+        avatarContext = this.avatarContext = avatarCanvas.getContext('2d');
+
+        const SIZE = 54;
+        const dpr = 1;
+        avatarCanvas.dpr = dpr;
+        avatarCanvas.width = avatarCanvas.height = SIZE * dpr;
+
+        this.avatarGradients = {};
+      } else {
+        avatarContext.clearRect(0, 0, avatarCanvas.width, avatarCanvas.height);
+      }
+
+      const color = getPeerAvatarColorByPeer(peer);
+      let gradient = this.avatarGradients[color];
+      if(!gradient) {
+        gradient = this.avatarGradients[color] = avatarContext.createLinearGradient(avatarCanvas.width / 2, 0, avatarCanvas.width / 2, avatarCanvas.height);
+
+        const colorTop = customProperties.getProperty(`peer-avatar-${color}-top`);
+        const colorBottom = customProperties.getProperty(`peer-avatar-${color}-bottom`);
+        gradient.addColorStop(0, colorTop);
+        gradient.addColorStop(1, colorBottom);
+      }
+
+      avatarContext.fillStyle = gradient;
+
+      drawCircle(avatarContext, avatarCanvas.width / 2, avatarCanvas.height / 2, avatarCanvas.width / 2);
+      avatarContext.fill();
+
+      const fontSize = 20 * avatarCanvas.dpr;
+      const abbreviation = getAbbreviation(peerTitle);
+
+      avatarContext.font = `700 ${fontSize}px ${FontFamily}`;
+      avatarContext.textBaseline = 'middle';
+      avatarContext.textAlign = 'center';
+      avatarContext.fillStyle = 'white';
+      avatarContext.fillText(abbreviation.text, avatarCanvas.width / 2, avatarCanvas.height * (window.devicePixelRatio > 1 || true ? .5625 : .5));
+
+      notification.image = avatarCanvas.toDataURL();
+    }
+
+    const pushData: PushNotificationObject = {
+      custom: {
+        msg_id: '' + message.mid,
+        peerId: '' + peerId
+      },
+      description: '',
+      loc_key: '',
+      loc_args: [],
+      mute: '',
+      random_id: 0,
+      title: ''
+    };
+
+    const result = await this.notify(notification, pushData);
+    if(result && this.registeredDevice) {
+      webPushApiManager.ignorePushByMid(peerId, message.mid);
     }
   }
 
@@ -359,45 +483,31 @@ export class UiNotificationsManager {
     }
   }
 
-  private setFavicon(href: string = 'assets/img/favicon.ico') {
+  private setFavicon(href?: string) {
     if(this.prevFavicon === href) {
       return;
     }
 
-    const link = this.faviconEl.cloneNode() as HTMLLinkElement;
-    link.href = href;
-    this.faviconEl.parentNode.replaceChild(link, this.faviconEl);
-    this.faviconEl = link;
-
     this.prevFavicon = href;
+    this.faviconElements.forEach((element, idx, arr) => {
+      const link = element.cloneNode() as HTMLLinkElement;
+
+      link.dataset.href ||= link.href;
+
+      href ??= link.dataset.href;
+      link.href = href;
+      element.replaceWith(arr[idx] = link);
+    });
   }
 
-  public notify(data: NotifyOptions) {
-    // console.log('notify', data, rootScope.idle.isIDLE, this.notificationsUiSupport, this.stopped);
+  public async notify(data: NotifyOptions, pushData: PushNotificationObject) {
+    this.log('notify', data, idleController.isIdle, this.notificationsUiSupport, this.stopped);
 
     if(this.stopped) {
       return;
     }
 
-    // FFOS Notification blob src bug workaround
-    /* if(Config.Navigator.ffos && !Config.Navigator.ffos2p) {
-      data.image = 'https://telegram.org/img/t_logo.png'
-    }
-    else if (data.image && !angular.isString(data.image)) {
-      if (Config.Navigator.ffos2p) {
-        FileManager.getDataUrl(data.image, 'image/jpeg').then(function (url) {
-          data.image = url
-          notify(data)
-        })
-        return false
-      } else {
-        data.image = FileManager.getUrl(data.image, 'image/jpeg')
-      }
-    }
-    else */ if(!data.image) {
-      data.image = 'assets/img/logo_filled_rounded.png';
-    }
-    // console.log('notify image', data.image)
+    data.image ||= NOTIFICATION_ICON_PATH;
 
     if(!data.noIncrement) {
       ++this.notificationsCount;
@@ -425,7 +535,7 @@ export class UiNotificationsManager {
 
     if(!this.notificationsUiSupport ||
       'Notification' in window && Notification.permission !== 'granted') {
-      return false;
+      return;
     }
 
     if(this.settings.nodesktop) {
@@ -437,64 +547,67 @@ export class UiNotificationsManager {
       return;
     }
 
+    if(!('Notification' in window)) {
+      return;
+    }
+
     let notification: MyNotification;
 
-    if('Notification' in window) {
-      try {
-        if(data.tag) {
-          for(const i in this.notificationsShown) {
-            const notification = this.notificationsShown[i];
-            if(typeof(notification) !== 'boolean' && notification.tag === data.tag) {
-              notification.hidden = true;
-            }
+    const notificationOptions: NotificationOptions = {
+      badge: NOTIFICATION_BADGE_PATH,
+      icon: data.image || '',
+      body: data.message || '',
+      tag: data.tag || '',
+      silent: data.silent || false,
+      data: pushData
+    };
+
+    try {
+      if(data.tag) {
+        for(const i in this.notificationsShown) {
+          const notification = this.notificationsShown[i];
+          if(typeof(notification) !== 'boolean' && notification.tag === data.tag) {
+            notification.hidden = true;
           }
         }
+      }
 
-        notification = new Notification(data.title, {
-          icon: data.image || '',
-          body: data.message || '',
-          tag: data.tag || '',
-          silent: data.silent || false
-        });
+      // throw new Error('test');
+      notification = new Notification(data.title, notificationOptions);
+    } catch(e) {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.showNotification(data.title, notificationOptions);
+        const notifications = await registration.getNotifications({tag: notificationOptions.tag});
+        notification = notifications[notifications.length - 1];
+      } catch(err) {
+        this.log.error('creating push error', err, data, notificationOptions);
+      }
 
-        // console.log('notify constructed notification');
-      } catch(e) {
+      if(!notification) {
         this.notificationsUiSupport = false;
         webPushApiManager.setLocalNotificationsDisabled();
         return;
       }
-    } /* else if('mozNotification' in navigator) {
-      notification = navigator.mozNotification.createNotification(data.title, data.message || '', data.image || '')
-    } else if(notificationsMsSiteMode) {
-      window.external.msSiteModeClearIconOverlay()
-      window.external.msSiteModeSetIconOverlay('img/icons/icon16.png', data.title)
-      window.external.msSiteModeActivate()
-      notification = {
-        index: idx
-      }
-    } */ else {
-      return;
     }
 
     notification.onclick = () => {
+      this.log('notification onclick');
       notification.close();
       appRuntimeManager.focus();
       this.clear();
-      if(data.onclick) {
-        data.onclick();
-      }
+      data.onclick?.();
     };
 
     notification.onclose = () => {
+      this.log('notification onclose');
       if(!notification.hidden) {
         delete this.notificationsShown[key];
         this.clear();
       }
     };
 
-    if(notification.show) {
-      notification.show();
-    }
+    notification.show?.();
     this.notificationsShown[key] = notification;
 
     if(!IS_MOBILE) {
@@ -502,6 +615,8 @@ export class UiNotificationsManager {
         this.hide(key);
       }, 8000);
     }
+
+    return true;
   }
 
   public updateLocalSettings = () => {
@@ -542,13 +657,8 @@ export class UiNotificationsManager {
 
   private hide(key: string) {
     const notification = this.notificationsShown[key];
-    if(notification && typeof(notification) !== 'boolean') {
-      try {
-        if(notification.close) {
-          notification.hidden = true;
-          notification.close();
-        }
-      } catch(e) {}
+    if(notification) {
+      this.closeNotification(notification);
     }
   }
 
@@ -587,48 +697,54 @@ export class UiNotificationsManager {
 
   public cancel(key: string) {
     const notification = this.notificationsShown[key];
+    this.log('cancel', key, notification);
     if(notification) {
       if(this.notificationsCount > 0) {
         --this.notificationsCount;
       }
 
-      try {
-        if(typeof(notification) !== 'boolean' && notification.close) {
-          notification.hidden = true;
-          notification.close();
-        }/*  else if(notificationsMsSiteMode &&
-          notification.index === notificationIndex) {
-          window.external.msSiteModeClearIconOverlay()
-        } */
-      } catch(e) {}
-
+      this.closeNotification(notification);
       delete this.notificationsShown[key];
     }
   }
 
-  public clear() {
-    /* if(notificationsMsSiteMode) {
-      window.external.msSiteModeClearIconOverlay()
-    } else { */
+  private closeNotification(notification: boolean | MyNotification) {
+    try {
+      if(typeof(notification) !== 'boolean' && notification.close) {
+        this.log('close notification', notification);
+        notification.hidden = true;
+        notification.close();
+      }
+    } catch(e) {}
+  }
+
+  public clear = () => {
+    this.log.warn('clear');
+
     for(const i in this.notificationsShown) {
       const notification = this.notificationsShown[i];
-      try {
-        if(typeof(notification) !== 'boolean' && notification.close) {
-          notification.close();
-        }
-      } catch(e) {}
+      this.closeNotification(notification);
     }
-    /* } */
+
     this.notificationsShown = {};
     this.notificationsCount = 0;
 
     webPushApiManager.hidePushNotifications();
-  }
+  };
 
   public start() {
+    this.log('start');
+    this.stopped = false;
+
     this.updateLocalSettings();
     rootScope.addEventListener('settings_updated', this.updateLocalSettings);
-    webPushApiManager.start();
+    apiManagerProxy.getState().then((state) => {
+      if(this.stopped || !state.keepSigned) {
+        return;
+      }
+
+      webPushApiManager.start();
+    });
 
     if(!this.notificationsUiSupport) {
       return false;
@@ -646,6 +762,8 @@ export class UiNotificationsManager {
   }
 
   private stop() {
+    this.log('stop');
+
     this.clear();
     window.clearInterval(this.titleInterval);
     this.titleInterval = 0;
@@ -665,6 +783,7 @@ export class UiNotificationsManager {
       app_sandbox: false,
       secret: new Uint8Array()
     }).then(() => {
+      this.log('registered device');
       this.registeredDevice = tokenData;
     }, (error) => {
       error.handled = true;

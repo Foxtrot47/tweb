@@ -4,30 +4,6 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-@mixin sidebar-transform($centered: false, $transform: true) {
-	@include respond-to(medium-screens) {
-		transition: transform var(--transition-standard-out);
-
-		body.is-right-column-shown & {
-      @if $transform {
-        @if $centered {
-          transform: translate3d(calc(var(--right-column-width) * -.5), 0, 0);
-        } @else {
-          transform: translate3d(calc(var(--right-column-width) * -1), 0, 0);
-        }
-      }
-
-			transition: transform var(--transition-standard-in);
-		}
-
-		body.animation-level-0 & {
-			transition: none;
-		}
-
-		@content;
-	}
-}
-
 body.is-calling {
   .topbar {
     &, 
@@ -67,16 +43,19 @@ body.is-right-column-shown {
 
 .topbar {
   --topbar-height: 3.5rem;
+  --topbar-avatar-active-size: 0px;
+  --topbar-close-active-size: 2.5rem;
+  --topbar-avatar-close-gap: 2px;
   
-  --pinned-floating-audio-height: 0px;
-  --pinned-floating-message-height: 0px;
-	--pinned-floating-height: calc(var(--pinned-floating-audio-height) + var(--pinned-floating-message-height) + var(--topbar-floating-call-height));
-  
-	--pinned-audio-height: 52px;
-	--pinned-message-height: 52px;
+  --pinned-container-height: 3.25rem;
+	--pinned-audio-height: var(--pinned-container-height);
+	--pinned-message-height: var(--pinned-container-height);
+  --pinned-translation-height: 2.625rem;
+  --pinned-live-height: 3.5rem;
+  --pinned-floating-height: 0px;
 
 	width: 100%;
-	z-index: 1;
+	z-index: 2;
 	min-height: var(--topbar-height) !important;
 	max-height: var(--topbar-height) !important;
 	margin-bottom: var(--pinned-floating-height);
@@ -94,32 +73,10 @@ body.is-right-column-shown {
 		pointer-events: none;
 	}
 
-	&.is-pinned-audio-floating {
-		--pinned-floating-audio-height: var(--pinned-audio-height);
-	}
-
-	&.is-pinned-message-floating {
-		--pinned-floating-message-height: var(--pinned-message-height);
-	}
-
 	&:not(.is-pinned-message-floating) {
 		.chat-utils {
 			position: relative;
 			z-index: 1;
-		}
-	}
-
-	&.is-pinned-audio-floating.is-pinned-message-floating {
-		.pinned-message {
-			top: calc(var(--topbar-height) + var(--pinned-audio-height));
-
-			&:before {
-				border-top: none;
-			}
-
-			/* &:before {
-				box-shadow: none;
-			} */
 		}
 	}
 
@@ -136,16 +93,29 @@ body.is-right-column-shown {
 	}
 
 	@include respond-to(no-floating-left-sidebar) {
-		.chat:first-child & {
+		.chat:first-child &:not(.show-back-button) {
+      --topbar-close-active-size: 0px;
+      --topbar-avatar-close-gap: 0px;
+
 			.sidebar-close-button {
 				display: none;
 			}
 
 			.chat-info {
-				padding-left: .1875rem;
+				padding-inline-start: .1875rem;
 			}
+
+      // .topbar-search-container {
+      //   inset-inline-start: 4.4375rem;
+      // }
 		}
 	}
+
+  &.has-avatar {
+    --topbar-close-active-size: 2.5rem;
+    --topbar-avatar-active-size: 2.625rem;
+    --topbar-avatar-close-gap: 6px;
+  }
 
 	.pinned-container-wrapper-utils {
 		@include sidebar-transform();
@@ -180,46 +150,45 @@ body.is-right-column-shown {
 		max-width: calc(100% - 1.5rem);
 		display: flex;
 		align-items: center;
-	
-		span.emoji {
+    font-weight: var(--font-weight-bold);
+
+		.emoji-native {
 			vertical-align: inherit;
 		}
 	}
-	
+
 	.peer-title, 
 	.info {
 		@include text-overflow();
 		line-height: var(--line-height);
 	}
 
-	.info:not(:empty) {
-		margin-top: 1px;
-	}
-
 	.btn-menu-toggle {
 		.btn-menu {
 			top: calc(100% + 7px);
 			max-height: calc(100 * var(--vh) - 4.375rem);
-			
+
 			@include respond-to(handhelds) {
 				max-height: calc(100 * var(--vh) - 3.75rem);
 				top: 29px;
 			}
 		}
-		
+
 		@include respond-to(handhelds) {
-			margin-left: 0;
+			margin-inline-start: 0;
 		}
 	}
 	
 	.chat-info {
 		flex: 1 1 auto;
 		overflow: hidden;
-		padding-left: 49px;
-		//--utils-width: NaN;
+		padding-inline-start: 49px;
+    height: 46px;
+    padding-top: 2px;
+    padding-bottom: 2px;
 
 		@include respond-to(handhelds) {
-			padding-left: 52px;
+			padding-inline-start: 52px;
     }
 		
 		//&.have-utils-width {
@@ -240,6 +209,7 @@ body.is-right-column-shown {
       max-height: 3.5rem;
       flex: 1 1 auto;
       max-width: 100%;
+      z-index: 1; // fix menu overlap
     }
 	}
 
@@ -266,7 +236,7 @@ body.is-right-column-shown {
 		height: 2.25rem;
 		font-weight: 400;
 		font-size: 0.875rem;
-		margin-right: .5rem;
+		margin-inline-end: .5rem;
 		padding: 0 1.375rem; // same as in new media popup
 
 		&:not(.hide) + .chat-mute-button {
@@ -276,7 +246,7 @@ body.is-right-column-shown {
 	
 	.content {
 		flex: 1 1 auto;
-		padding-left: 1.125rem;
+		padding-inline-start: 1.125rem;
 		max-width: 100%;
 		overflow: hidden;
 	}
@@ -284,6 +254,7 @@ body.is-right-column-shown {
 	.person {
 		display: flex;
 		align-items: center;
+    height: 100%;
 
 		&-avatar {
 			flex: 0 0 auto;
@@ -301,7 +272,11 @@ body.is-right-column-shown {
 	}
 
 	&.hide-pinned {
-    --pinned-floating-height: 0px;
+    --pinned-floating-height: 0px !important;
+
+    &.search-top-active {
+      --pinned-floating-height: 3rem !important;
+    }
 
     .pinned-container {
       display: none;
@@ -314,9 +289,18 @@ body.is-right-column-shown {
     }
   }
 
-	.chat:not(.type-chat) & {
+  .selector-user {
+    color: var(--secondary-text-color);
+    font-weight: var(--font-weight-bold);
+
+    @include respond-to(handhelds) {
+      max-width: 9rem;
+    }
+  }
+
+	.chat:not([data-type="chat"]) & {
 		.content {
-			padding-left: 16px;
+			padding-inline-start: 16px;
 		}
 
 		/* .user-title {
@@ -334,8 +318,7 @@ body.is-right-column-shown {
       min-height: auto !important;
       position: absolute;
       top: calc(var(--topbar-call-height) * -1);
-      right: 0;
-      left: 1px; // because I have border-right on left sidebar that "pushes" the chat
+      inset-inline: 1px 0; // because I have border-right on left sidebar that "pushes" the chat
       color: #fff;
       z-index: 2;
       cursor: pointer !important;
@@ -345,7 +328,7 @@ body.is-right-column-shown {
       }
 
       @include respond-to(until-floating-left-sidebar) {
-        left: 0;
+        inset-inline-start: 0;
       }
 
       .btn-icon {
@@ -361,7 +344,7 @@ body.is-right-column-shown {
         white-space: nowrap;
       }
 
-      &:not(.is-call) {
+      &.is-group-call {
         @media only screen and (max-width: 480px) {
           .topbar-call-left,
           .topbar-call-right {
@@ -386,6 +369,19 @@ body.is-right-column-shown {
           }
         }
       }
+
+      &.is-rtmp {
+        font-size: var(--font-size-14);
+
+        .topbar-call-left {
+          font-weight: var(--font-weight-bold);
+        }
+
+        .rtmp-description {
+          margin-inline-start: .5rem;
+          opacity: .6;
+        }
+      }
     }
 
     &-left, 
@@ -399,7 +395,7 @@ body.is-right-column-shown {
       align-items: center;
 
       .btn-icon {
-        margin-right: .375rem;
+        margin-inline-end: .375rem;
       }
 
       .call-description {
@@ -412,7 +408,7 @@ body.is-right-column-shown {
     }
 
     &-center {
-      @include sidebar-transform(true);
+      @include sidebar-transform(1);
       @include text-overflow();
 
       @include respond-to(medium-screens) {
@@ -437,15 +433,25 @@ body.is-right-column-shown {
       left: 0;
       z-index: -1;
       transform: scale(var(--topbar-floating-scaleX), -1);
-      transform-origin: left center;
+      transform-origin: var(--transform-origin-left-center);
       pointer-events: none;
 
-      @include sidebar-transform(false, false);
+      @include sidebar-transform(0, false);
 
       &-canvas {
         width: 100%;
         height: 100%;
       }
+    }
+  }
+
+  .back-unread-badge {
+    position: absolute;
+    top: -.25rem;
+    inset-inline-end: -.5rem;
+
+    @include respond-to(not-handhelds) {
+      display: none;
     }
   }
 }

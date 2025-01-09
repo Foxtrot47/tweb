@@ -7,6 +7,7 @@
 import attachGrabListeners, {GrabEvent} from '../helpers/dom/attachGrabListeners';
 import clamp from '../helpers/number/clamp';
 import safeAssign from '../helpers/object/safeAssign';
+import I18n from '../lib/langPack';
 
 export default class RangeSelector {
   public container: HTMLDivElement;
@@ -36,8 +37,8 @@ export default class RangeSelector {
   constructor(
     options: {
       step: RangeSelector['step'],
-      min: RangeSelector['min'],
-      max: RangeSelector['max'],
+      min?: RangeSelector['min'],
+      max?: RangeSelector['max'],
       withTransition?: RangeSelector['withTransition'],
       useTransform?: RangeSelector['useTransform'],
       vertical?: RangeSelector['vertical']
@@ -61,11 +62,9 @@ export default class RangeSelector {
 
     const seek = this.seek = document.createElement('input');
     seek.classList.add('progress-line__seek');
-    // seek.setAttribute('max', '0');
     seek.type = 'range';
     seek.step = '' + this.step;
-    seek.min = '' + this.min;
-    seek.max = '' + this.max;
+    this.setMinMax(this.min, this.max);
     seek.value = '' + value;
 
     if(value) {
@@ -76,9 +75,14 @@ export default class RangeSelector {
     const index = stepStr.indexOf('.');
     this.decimals = index === -1 ? 0 : stepStr.length - index - 1;
 
-    // this.setListeners();
-
     this.container.append(this.filled, seek);
+  }
+
+  public setMinMax(min?: number, max?: number) {
+    this.min = min ?? (this.min ??= 0);
+    this.max = max ?? (this.max ??= 0);
+    this.seek.min = '' + min;
+    this.seek.max = '' + max;
   }
 
   get value() {
@@ -142,7 +146,17 @@ export default class RangeSelector {
 
   protected scrub(event: GrabEvent) {
     const rectMax = this.vertical ? this.rect.height : this.rect.width;
-    const offsetAxisValue = clamp(this.vertical ? -(event.y - this.rect.bottom) : event.x - this.rect.left, 0, rectMax);
+    let offsetAxisValue = clamp(
+      this.vertical ?
+        -(event.y - this.rect.bottom) :
+        event.x - this.rect.left,
+      0,
+      rectMax
+    );
+
+    if(!this.vertical && I18n.isRTL) {
+      offsetAxisValue = rectMax - offsetAxisValue;
+    }
 
     let value = this.min + (offsetAxisValue / rectMax * (this.max - this.min));
 

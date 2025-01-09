@@ -4,15 +4,15 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {SettingSection} from '../..';
 import {attachClickEvent} from '../../../../helpers/dom/clickEvent';
 import Button from '../../../button';
+import SettingSection from '../../../settingSection';
 import {SliderSuperTab} from '../../../slider';
 import wrapStickerEmoji from '../../../wrappers/stickerEmoji';
 import AppSettingsTab from '../settings';
 
 export default class AppTwoStepVerificationSetTab extends SliderSuperTab {
-  protected init() {
+  public init() {
     this.container.classList.add('two-step-verification', 'two-step-verification-set');
     this.setTitle('TwoStepVerificationPasswordSet');
 
@@ -50,6 +50,6 @@ export default class AppTwoStepVerificationSetTab extends SliderSuperTab {
 
     inputContent.append(inputWrapper);
 
-    this.scrollable.container.append(section.container);
+    this.scrollable.append(section.container);
   }
 }

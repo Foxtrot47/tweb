@@ -1,3 +1,54 @@
+### 2.1.0 (491)
+You can see the full list of new features and improvements here: https://t.me/WebK_en/16
+
+### 2.0.0 (454)
+You can see the full list of new features and improvements here: https://t.me/WebK_en/13
+
+### 1.9.6 (400)
+You can see the full list of new features and improvements here: https://t.me/WebK_en/12
+
+### 1.8.0 (322)
+You can see the full list of new features and improvements here: https://t.me/WebK_en/11
+
+### 1.7.0 (273)
+🎄 Happy New Year to everyone! [WebK](http://web.telegram.org/k) launched its first update of 2023, adding a pack of features you can now enjoy on Web!
+
+📚 [Topics 2.0](https://telegram.org/blog/ultimate-privacy-topics-2-0#topics-2-0)
+Admins of **any group** can enable Topics, creating separate spaces within the group to discuss different subjects – with a sleek **two-column layout** to easily navigate chats.
+
+😶‍🌫️ [Hidden Media](https://telegram.org/blog/hidden-media-zero-storage-profile-pics#hidden-media) 
+Media hidden with a shimmering spoiler effect is properly displayed in the app – just tap or click to view the image. The next [WebK](http://web.telegram.org/k) update will allow you to send media with this spoiler effect.
+
+🏴‍☠️ [No-SIM Signup and Login](https://telegram.org/blog/ultimate-privacy-topics-2-0#sign-up-without-a-sim-card) 
+Users who have an **anonymous number** from [Fragment](https://fragment.com/numbers) can login to their existing account or create a **new account** with the number.
+
+🔤 [Collectible Usernames](https://telegram.org/blog/topics-in-groups-collectible-usernames#collectible-usernames)  
+Owners of collectible usernames can now **assign collectibles** to their personal account, groups or channels – and **manage** them within the app.
+
+Lastly, the app also preserves your **history stack** – if you follow a [t.me](https://t.me) link to another message in a chat, you can return to the **first message** with the 🔽 button.
+
+### 1.6.0 (244)
+Today, [WebK](https://web.telegram.org/k) introduces a redesigned **Emoji and Sticker Panel** – try the **collapsible section** for default emoji categories and the **scrollable bar** for your custom emoji sets.
+
+The new Panel features a beautiful blur effect on most desktop browsers and allows you to **send** or **edit** messages containing custom emoji. __(All users can try out this feature in their Saved Messages)__ 
+
+In the Stickers tab, you can now add or remove stickers from favorites, **send without sound** or individually delete them from the __Recents__ section. 
+
+**Preview Stickers and Emoji**
+You can now get a closer look at stickers and emoji, both in the panel and in chats. Click and hold, then hover your cursor over the one you'd like to see in better detail.
+
+Stickers are now rendered more efficiently, using fewer resources and **saving battery**. Custom Emoji have also had more improvements since their launch in [late August](https://t.me/WebK_en/7).
+
+**Downloading Files**
+The download flow has been reworked from scratch. When you download something, the app uses your connection in the **most efficient** way possible. Premium users will notice how dramatically fast the app downloads files for them – a little demo is available [here](https://t.me/WebK_en/7?comment=531).
+
+Large files of **up to 4 GB** are now supported for both upload and download. There is also support for native downloading in certain browsers – your browser will place active downloads on the instrument bar. 
+
+**Payments 2.0**
+Significant optimizations were added to smoothly process payments in **any browser**, and adding familiar functionality from other Telegram apps. Bot payments, @donate invoices and more are supported – including the ability to subscribe to Telegram Premium with @PremiumBot.
+
+Dozens of bug fixes were also made to the app – but those can be a bit boring to read. If you ever come across a bug in the app, make sure to let us know on the [Bugs and Suggestions Platform](https://bugs.telegram.org/?tag_ids=40&type=issues&sort=time).
+
 ### 1.5.0 (178)
 1️⃣ Introducing support for **Multiple Tabs** – a first for Telegram Web Apps – customizing how you browse Telegram to increase comfort and productivity.
  

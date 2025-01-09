@@ -8,7 +8,18 @@ import Scrollable from '../components/scrollable';
 import {MOUNT_CLASS_TO} from '../config/debug';
 import {IS_SAFARI} from '../environment/userAgent';
 import getVisibleRect from './dom/getVisibleRect';
-import reflowScrollableElement from './dom/reflowScrollableElement';
+import {fastRaf} from './schedulers';
+
+// let USE_REFLOW = false;
+// if(IS_SAFARI) {
+//   try {
+//     // throw '';
+//     const match = navigator.userAgent.match(/Version\/(.+?) /);
+//     USE_REFLOW = +match[1] < 15.4;
+//   } catch(err) {
+//     USE_REFLOW = true;
+//   }
+// }
 
 export default class ScrollSaver {
   private scrollHeight: number;
@@ -110,27 +121,38 @@ export default class ScrollSaver {
   }
 
   private onRestore(useReflow?: boolean) {
-    if(IS_SAFARI && useReflow/*  && !isAppleMobile */) { // * fix blinking and jumping
-      reflowScrollableElement(this.container);
-    }
+    // if(USE_REFLOW && useReflow/*  && !isAppleMobile */) { // * fix blinking and jumping
+    //   reflowScrollableElement(this.container);
+    // }
+
+    this.scrollable.onSizeChange();
   }
 
   private setScrollTop(newScrollTop: number, useReflow?: boolean) {
     // touchSupport for safari iOS
     // isTouchSupported && isApple && (container.container.style.overflow = 'hidden');
-    this.scrollable.setScrollTopSilently(this.scrollTop = newScrollTop);
+    this.scrollable.setScrollPositionSilently(this.scrollTop = newScrollTop);
     // container.scrollTop = scrollHeight;
     // isTouchSupported && isApple && (container.container.style.overflow = '');
+
+    if(IS_SAFARI) {
+      fastRaf(() => {
+        if(this.scrollTop === newScrollTop) {
+          this.scrollable.setScrollPositionSilently(this.scrollTop = newScrollTop);
+        }
+      });
+    }
 
     this.onRestore(useReflow);
   }
 
   public restore(useReflow?: boolean) {
-    const {scrollTop, scrollHeight} = this.scrollable;
+    const {scrollPosition: scrollTop, scrollSize: scrollHeight} = this.scrollable;
     this.scrollHeight = scrollHeight;
 
-    if(!this.elements.length) { // maybe all messages have been deleted
-      this._restore(useReflow);
+    if(!this.elements.length) { // maybe all messages have been deleted or adding first message
+      // this._restore(useReflow);
+      this.setScrollTop(this.reverse ? scrollHeight : 0, useReflow); // fix scrolling to first new message
       return;
     }
 

@@ -5,10 +5,11 @@
  */
 
 import type ChatInput from './input';
-import type {MessageEntity} from '../../layer';
 import AutocompleteHelperController from './autocompleteHelperController';
 import AutocompletePeerHelper from './autocompletePeerHelper';
 import {AppManagers} from '../../lib/appManagers/managers';
+import getPeerActiveUsernames from '../../lib/appManagers/utils/peers/getPeerActiveUsernames';
+import rootScope from '../../lib/rootScope';
 
 export default class MentionsHelper extends AutocompletePeerHelper {
   constructor(
@@ -22,51 +23,50 @@ export default class MentionsHelper extends AutocompletePeerHelper {
       controller,
       'mentions-helper',
       (target) => {
-        const userId = (target as HTMLElement).dataset.peerId.toUserId();
-        const user = Promise.resolve(managers.appUsersManager.getUser(userId)).then((user) => {
-          let str = '', entity: MessageEntity;
-          if(user.username) {
-            str = '@' + user.username;
-          } else {
-            str = user.first_name || user.last_name;
-            entity = {
-              _: 'messageEntityMentionName',
-              length: str.length,
-              offset: 0,
-              user_id: user.id
-            };
-          }
-
-          str += ' ';
-          chatInput.insertAtCaret(str, entity);
-        });
+        const peerId = (target as HTMLElement).dataset.peerId.toPeerId();
+        chatInput.mentionUser(peerId, true);
       }
     );
   }
 
-  public checkQuery(query: string, peerId: PeerId, topMsgId: number) {
+  public checkQuery(
+    query: string,
+    peerId: PeerId,
+    topMsgId: number,
+    global?: boolean
+  ) {
     const trimmed = query.trim(); // check that there is no whitespace
     if(query.length !== trimmed.length) return false;
 
     const middleware = this.controller.getMiddleware();
-    this.managers.appProfileManager.getMentions(peerId && peerId.toChatId(), trimmed, topMsgId).then(async(peerIds) => {
+    this.managers.appProfileManager.getMentions(
+      peerId && peerId.toChatId(),
+      trimmed,
+      topMsgId,
+      global
+    ).then(async(peerIds) => {
       if(!middleware()) return;
 
-      const username = trimmed.slice(1).toLowerCase();
+      peerIds = peerIds.filter((peerId) => peerId !== rootScope.myId);
+
+      // const username = trimmed.slice(1).toLowerCase();
 
       const p = peerIds.map(async(peerId) => {
         const user = await this.managers.appUsersManager.getUser(peerId);
-        if(user.username && user.username.toLowerCase() === username) { // hide full matched suggestion
-          return;
-        }
+        const usernames = getPeerActiveUsernames(user);
+        // if(usernames.length && usernames.some((_username) => _username.toLowerCase() === username)) { // hide full matched suggestion
+        //   return;
+        // }
 
         return {
           peerId,
-          description: user.username ? '@' + user.username : undefined
+          description: usernames[0] ? '@' + usernames[0] : undefined
         };
       });
 
-      this.render((await Promise.all(p)).filter(Boolean));
+      const out = (await Promise.all(p)).filter(Boolean);
+      if(!middleware()) return;
+      this.render(out, middleware);
     });
 
     return true;

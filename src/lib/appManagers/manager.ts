@@ -43,7 +43,19 @@ import type {AppStoragesManager} from './appStoragesManager';
 import type {AppUsersManager} from './appUsersManager';
 import type AppWebDocsManager from './appWebDocsManager';
 import type {AppWebPagesManager} from './appWebPagesManager';
+import type AppAttachMenuBotsManager from './appAttachMenuBotsManager';
+import type AppSeamlessLoginManager from './appSeamlessLoginManager';
+import type AppThemesManager from './appThemesManager';
+import type AppUsernamesManager from './appThemesManager';
+import type AppChatInvitesManager from './appChatInvitesManager';
+import type AppStoriesManager from './appStoriesManager';
+import type AppBotsManager from './appBotsManager';
+import type AppBoostsManager from './appBoostsManager';
+import type AppStatisticsManager from './appStatisticsManager';
+import type AppBusinessManager from './appBusinessManager';
+import type AppTranslationsManager from './appTranslationsManager';
 import type {AppManagers} from './managers';
+import AppGifsManager from './appGifsManager';
 
 export class AppManager {
   protected appPeersManager: AppPeersManager;
@@ -86,6 +98,18 @@ export class AppManager {
   protected appStateManager: AppStateManager;
   protected appWebDocsManager: AppWebDocsManager;
   protected appPaymentsManager: AppPaymentsManager;
+  protected appAttachMenuBotsManager: AppAttachMenuBotsManager;
+  protected appSeamlessLoginManager: AppSeamlessLoginManager;
+  protected appThemesManager: AppThemesManager;
+  protected appUsernamesManager: AppUsernamesManager;
+  protected appChatInvitesManager: AppChatInvitesManager;
+  protected appStoriesManager: AppStoriesManager;
+  protected appBotsManager: AppBotsManager;
+  protected appBoostsManager: AppBoostsManager;
+  protected appStatisticsManager: AppStatisticsManager;
+  protected appBusinessManager: AppBusinessManager;
+  protected appTranslationsManager: AppTranslationsManager;
+  protected appGifsManager: AppGifsManager;
 
   public clear: (init?: boolean) => void;
 

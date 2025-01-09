@@ -6,6 +6,7 @@
 
 import appSidebarRight from '..';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
+import rootScope from '../../../lib/rootScope';
 import AppSearch, {SearchGroup} from '../../appSearch';
 import ButtonIcon from '../../buttonIcon';
 import InputSearch from '../../inputSearch';
@@ -27,10 +28,15 @@ export default class AppPrivateSearchTab extends SliderSuperTab {
     this.appSearch.beginSearch(this.peerId, this.threadId, this.query);
   }
 
-  protected init() {
+  public init(
+    peerId: PeerId,
+    threadId?: number,
+    onDatePick?: AppPrivateSearchTab['onDatePick'],
+    query?: string
+  ) {
     this.container.id = 'search-private-container';
     this.container.classList.add('chatlist-container');
-    this.inputSearch = new InputSearch('Search');
+    this.inputSearch = new InputSearch({placeholder: 'Search'});
     this.title.replaceWith(this.inputSearch.container);
 
     this.btnPickDate = ButtonIcon('calendar sidebar-header-right');
@@ -39,13 +45,17 @@ export default class AppPrivateSearchTab extends SliderSuperTab {
     const c = document.createElement('div');
     c.classList.add('chatlist-container');
     this.scrollable.container.replaceWith(c);
-    this.appSearch = new AppSearch(c, this.inputSearch, {
-      messages: new SearchGroup('Chat.Search.PrivateSearch', 'messages')
-    });
-  }
-
-  open(peerId: PeerId, threadId?: number, onDatePick?: AppPrivateSearchTab['onDatePick'], query?: string) {
-    const ret = super.open();
+    this.appSearch = new AppSearch(
+      c,
+      this.inputSearch,
+      {
+        messages: new SearchGroup('Chat.Search.PrivateSearch', 'messages')
+      },
+      this.middlewareHelper.get(),
+      undefined,
+      undefined,
+      !!(peerId === rootScope.myId && threadId)
+    );
 
     if(!this.peerId) {
       this.query = query;
@@ -57,7 +67,7 @@ export default class AppPrivateSearchTab extends SliderSuperTab {
       if(this.onDatePick) {
         attachClickEvent(this.btnPickDate, () => {
           PopupElement.createPopup(PopupDatePicker, new Date(), this.onDatePick).show();
-        });
+        }, {listenerSetter: this.listenerSetter});
       }
 
       query && this.appSearch.searchInput.inputField.setValueSilently(query);
@@ -66,7 +76,5 @@ export default class AppPrivateSearchTab extends SliderSuperTab {
     } else {
       this.appSearch.beginSearch(this.peerId, this.threadId, query);
     }
-
-    return ret;
   }
 }

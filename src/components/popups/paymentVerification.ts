@@ -6,38 +6,25 @@
 
 import PopupElement from '.';
 import appImManager from '../../lib/appManagers/appImManager';
-import {TelegramWebviewEventCallback} from '../../types';
+import TelegramWebView from '../telegramWebView';
 
-const weakMap: WeakMap<Window, TelegramWebviewEventCallback> = new WeakMap();
-window.addEventListener('message', (e) => {
-  const callback = weakMap.get(e.source as Window);
-  if(!callback) {
-    return;
-  }
-
-  callback(JSON.parse(e.data));
-});
-
-export function createVerificationIframe(url: string, callback: TelegramWebviewEventCallback) {
-  const iframe = document.createElement('iframe');
-  // iframe.title = 'Complete Payment';
+export function createVerificationIframe(options: ConstructorParameters<typeof TelegramWebView>[0]) {
+  const result = new TelegramWebView({
+    ...options,
+    sandbox: 'allow-forms allow-scripts allow-same-origin allow-modals'
+  });
+  const {iframe} = result;
   iframe.allow = 'payment';
-  // iframe.setAttribute('sandbox', 'allow-forms allow-scripts allow-same-origin allow-top-navigation allow-modals');
-  iframe.setAttribute('sandbox', 'allow-forms allow-scripts allow-same-origin allow-modals');
   iframe.classList.add('payment-verification');
-  iframe.src = url;
-
-  iframe.addEventListener('load', () => {
-    weakMap.set(iframe.contentWindow, callback);
-  }, {once: true});
-
-  return iframe;
+  return result;
 }
 
 export default class PopupPaymentVerification extends PopupElement<{
   finish: () => void
 }> {
-  constructor(private url: string) {
+  private telegramWebView: TelegramWebView;
+
+  constructor(private url: string, private openPathAfter?: boolean) {
     super('popup-payment popup-payment-verification', {
       closable: true,
       overlayClosable: true,
@@ -49,17 +36,25 @@ export default class PopupPaymentVerification extends PopupElement<{
   }
 
   private d() {
-    const iframe = createVerificationIframe(this.url, (event) => {
-      if(event.eventType !== 'web_app_open_tg_link') {
-        return;
-      }
-
-      this.dispatchEvent('finish');
-      this.hide();
-      appImManager.openUrl('https://t.me' + event.eventData.path_full);
+    const telegramWebView = this.telegramWebView = createVerificationIframe({
+      url: this.url
     });
 
-    this.body.append(iframe);
+    telegramWebView.addEventListener('web_app_open_tg_link', (e) => {
+      this.dispatchEvent('finish');
+      this.hide();
+      if(this.openPathAfter) {
+        appImManager.openUrl('https://t.me' + e.path_full);
+      }
+    });
+
+    this.body.append(telegramWebView.iframe);
     this.show();
+    telegramWebView.onMount();
+  }
+
+  protected destroy() {
+    this.telegramWebView.destroy();
+    return super.destroy();
   }
 }

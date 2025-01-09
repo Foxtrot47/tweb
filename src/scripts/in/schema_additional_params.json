@@ -23,6 +23,12 @@
     {"name": "size", "type": "number"}
   ]
 }, {
+  "predicate": "photoStrippedSize",
+  "params": [
+    {"name": "w", "type": "number"},
+    {"name": "h", "type": "number"}
+  ]
+}, {
   "predicate": "dialog",
   "params": [
     {"name": "folder_id", "type": "0 | 1"},
@@ -48,6 +54,16 @@
     {"name": "index_19", "type": "number"},
     {"name": "index_20", "type": "number"},
     {"name": "index_21", "type": "number"},
+    {"name": "index_22", "type": "number"},
+    {"name": "index_23", "type": "number"},
+    {"name": "index_24", "type": "number"},
+    {"name": "index_25", "type": "number"},
+    {"name": "index_26", "type": "number"},
+    {"name": "index_27", "type": "number"},
+    {"name": "index_28", "type": "number"},
+    {"name": "index_29", "type": "number"},
+    {"name": "index_30", "type": "number"},
+    {"name": "index_31", "type": "number"},
     {"name": "peerId", "type": "PeerId"},
     {"name": "topMessage", "type": "any"},
     {"name": "migratedTo", "type": "PeerId"}
@@ -74,10 +90,17 @@
     {"name": "localId", "type": "0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21"}
   ]
 }, {
+  "predicate": "dialogFilterChatlist",
+  "params": [
+    {"name": "localId", "type": "0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21"},
+    {"name": "pinnedPeerIds", "type": "PeerId[]"},
+    {"name": "includePeerIds", "type": "PeerId[]"},
+    {"name": "updatedTime", "type": "number"}
+  ]
+}, {
   "predicate": "message",
   "params": [
     {"name": "mid", "type": "number"},
-    {"name": "deleted", "type": "boolean"},
     {"name": "peerId", "type": "PeerId"},
     {"name": "fromId", "type": "PeerId"},
     {"name": "fwdFromId", "type": "PeerId"},
@@ -86,11 +109,10 @@
     {"name": "unread", "type": "true"},
     {"name": "is_outgoing", "type": "true"},
     {"name": "is_scheduled", "type": "true"},
-    {"name": "rReply", "type": "string"},
     {"name": "viaBotId", "type": "PeerId"},
     {"name": "clear_history", "type": "boolean"},
     {"name": "pending", "type": "boolean"},
-    {"name": "error", "type": "any"},
+    {"name": "error", "type": "ApiError"},
     {"name": "send", "type": "() => Promise<any>"},
     {"name": "totalEntities", "type": "MessageEntity[]"},
     {"name": "reply_to_mid", "type": "number"},
@@ -99,7 +121,8 @@
     {"name": "local", "type": "true"},
     {"name": "sponsoredMessage", "type": "SponsoredMessage.sponsoredMessage"},
     {"name": "promise", "type": "CancellablePromise<void>"},
-    {"name": "uploadingFileName", "type": "string"}
+    {"name": "uploadingFileName", "type": "string[]"},
+    {"name": "storageKey", "type": "MessagesStorageKey"}
   ]
 }, {
   "predicate": "messageService",
@@ -110,16 +133,16 @@
     {"name": "fromId", "type": "PeerId"},
     {"name": "unread", "type": "true"},
     {"name": "is_outgoing", "type": "true"},
-    {"name": "rReply", "type": "string"},
     {"name": "viaBotId", "type": "PeerId"},
     {"name": "is_single", "type": "true"},
     {"name": "pending", "type": "boolean"},
-    {"name": "error", "type": "any"},
+    {"name": "error", "type": "ApiError"},
     {"name": "send", "type": "() => Promise<any>"},
     {"name": "random_id", "type": "string"},
     {"name": "reply_to_mid", "type": "number"},
     {"name": "clear_history", "type": "boolean"},
-    {"name": "local", "type": "true"}
+    {"name": "local", "type": "true"},
+    {"name": "storageKey", "type": "MessagesStorageKey"}
   ]
 }, {
   "predicate": "messageEmpty",
@@ -163,6 +186,15 @@
     {"name": "unsafe", "type": "boolean"}
   ]
 }, {
+  "predicate": "messageEntityTimestamp",
+  "params": [
+    {"name": "offset", "type": "number"},
+    {"name": "length", "type": "number"},
+    {"name": "time", "type": "number"},
+    {"name": "raw", "type": "string"}
+  ],
+  "type": "MessageEntity"
+}, {
   "predicate": "user",
   "params": [
     {"name": "sortName", "type": "string"}
@@ -174,6 +206,10 @@
   ]
 }, {
   "predicate": "messageActionDiscussionStarted",
+  "params": [],
+  "type": "MessageAction"
+}, {
+  "predicate": "messageActionChannelJoined",
   "params": [],
   "type": "MessageAction"
 }, {
@@ -323,6 +359,18 @@
   ],
   "type": "MessageMedia"
 }, {
+  "predicate": "messageMediaPhotoExternal",
+  "params": [
+    {"name": "photo", "type": "WebDocument"}
+  ],
+  "type": "MessageMedia"
+}, {
+  "predicate": "messageMediaDocumentExternal",
+  "params": [
+    {"name": "document", "type": "WebDocument"}
+  ],
+  "type": "MessageMedia"
+}, {
   "predicate": "availableReaction",
   "properties": [
     {"name": "static_icon", "type": "Document.document"},
@@ -359,5 +407,106 @@
     {"name": "h", "type": "number"},
     {"name": "w", "type": "number"},
     {"name": "mime_type", "type": "MTMimeType"}
+  ]
+}, {
+  "predicate": "chatForbidden",
+  "params": [
+    {"name": "pFlags", "type": "{}"}
+  ]
+}, {
+  "predicate": "forumTopic",
+  "params": [
+    {"name": "peerId", "type": "PeerId"},
+    {"name": "index_0", "type": "number"},
+    {"name": "peer", "type": "Peer"}
+  ]
+}, {
+  "predicate": "savedDialog",
+  "params": [
+    {"name": "peerId", "type": "PeerId"},
+    {"name": "index_0", "type": "number"},
+    {"name": "savedPeerId", "type": "PeerId"}
+  ]
+}, {
+  "predicate": "channelParticipantsAdmins",
+  "params": [
+    {"name": "q", "type": "string"}
+  ]
+}, {
+  "predicate": "channelParticipant",
+  "params": [
+    {"name": "peer", "type": "Peer"}
+  ]
+}, {
+  "predicate": "sponsoredMessage",
+  "params": [
+    {"name": "viewed", "type": "boolean"}
+  ]
+}, {
+  "predicate": "webPage",
+  "params": [
+    {"name": "type", "type": "'document' | 'photo' | 'telegram_channel' | 'telegram_megagroup' | 'telegram_bot' | 'telegram_botapp' | 'telegram_user' | 'telegram_chatlist' | 'telegram_story' | 'telegram_channel_boost' | 'telegram_giftcode' | 'telegram_chat' | 'telegram_videochat' | 'telegram_voicechat' | 'telegram_livestream'"},
+    {"name": "entities", "type": "MessageEntity[]"}
+  ]
+}, {
+  "predicate": "inputReplyToMessage",
+  "params": [
+    {"name": "reply_to_peer_id", "type": "PeerId | InputPeer"}
+  ]
+}, {
+  "predicate": "stats.messageStats",
+  "params": [
+    {"name": "views", "type": "StatsAbsValueAndPrev"},
+    {"name": "reactions", "type": "StatsAbsValueAndPrev"},
+    {"name": "public_shares", "type": "StatsAbsValueAndPrev"},
+    {"name": "private_shares", "type": "StatsAbsValueAndPrev"}
+  ]
+}, {
+  "predicate": "stats.storyStats",
+  "params": [
+    {"name": "views", "type": "StatsAbsValueAndPrev"},
+    {"name": "reactions", "type": "StatsAbsValueAndPrev"},
+    {"name": "public_shares", "type": "StatsAbsValueAndPrev"},
+    {"name": "private_shares", "type": "StatsAbsValueAndPrev"}
+  ]
+}, {
+  "predicate": "statsAbsValueAndPrev",
+  "params": [
+    {"name": "approximate", "type": "boolean"}
+  ]
+}, {
+  "predicate": "payments.checkedGiftCode",
+  "params": [
+    {"name": "slug", "type": "string"}
+  ]
+}, {
+  "predicate": "updateSavedReactionTags",
+  "params": [
+    {"name": "tags", "type": "SavedReactionTag[]"},
+    {"name": "savedPeerId", "type": "PeerId"}
+  ]
+}, {
+  "predicate": "updatePts",
+  "params": [
+    {"name": "pts", "type": "number"},
+    {"name": "pts_count", "type": "number"}
+  ],
+  "type": "Update"
+}, {
+  "predicate": "emojiGroupPremium",
+  "params": [
+    {"name": "title", "type": "string"},
+    {"name": "icon_emoji_id", "type": "Long"}
+  ],
+  "type": "EmojiGroup"
+}, {
+  "predicate": "storyItem",
+  "params": [
+    {"name": "pinnedIndex", "type": "number"}
+  ]
+}, {
+  "predicate": "storyItemSkipped",
+  "params": [
+    {"name": "pinnedIndex", "type": "number"}
   ]
 }]

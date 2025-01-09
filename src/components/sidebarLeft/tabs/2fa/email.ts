@@ -4,7 +4,6 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {SettingSection} from '../..';
 import {AccountPassword} from '../../../../layer';
 import Button from '../../../button';
 import {SliderSuperTab} from '../../../slider';
@@ -18,6 +17,8 @@ import {canFocus} from '../../../../helpers/dom/canFocus';
 import {attachClickEvent} from '../../../../helpers/dom/clickEvent';
 import matchEmail from '../../../../lib/richTextProcessor/matchEmail';
 import wrapStickerEmoji from '../../../wrappers/stickerEmoji';
+import SettingSection from '../../../settingSection';
+import PopupElement from '../../../popups';
 
 export default class AppTwoStepVerificationEmailTab extends SliderSuperTab {
   public inputField: InputField;
@@ -27,7 +28,7 @@ export default class AppTwoStepVerificationEmailTab extends SliderSuperTab {
   public hint: string;
   public isFirst = false;
 
-  protected init() {
+  public init() {
     this.container.classList.add('two-step-verification', 'two-step-verification-email');
     this.setTitle('RecoveryEmailTitle');
 
@@ -125,7 +126,7 @@ export default class AppTwoStepVerificationEmailTab extends SliderSuperTab {
     };
 
     attachClickEvent(btnSkip, (e) => {
-      const popup = new PopupPeer('popup-skip-email', {
+      const popup = PopupElement.createPopup(PopupPeer, 'popup-skip-email', {
         buttons: [{
           langKey: 'Cancel',
           isCancel: true
@@ -159,7 +160,7 @@ export default class AppTwoStepVerificationEmailTab extends SliderSuperTab {
 
     inputContent.append(inputWrapper);
 
-    this.scrollable.container.append(section.container);
+    this.scrollable.append(section.container);
   }
 
   onOpenAfterTimeout() {

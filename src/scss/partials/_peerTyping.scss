@@ -8,7 +8,7 @@
 
 .peer-typing {
   //display: flex;
-  margin-right: 4px;
+  margin-inline-end: 4px;
   
   &-container {
     --color: var(--primary-color);
@@ -38,7 +38,7 @@
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background-color: var(--color);
+      background-color: currentColor;
       margin: 0 .5px;
       display: inline-block;
       vertical-align: middle;
@@ -46,14 +46,14 @@
       animation-iteration-count: infinite;
       animation-timing-function: linear;
       animation-name: dotMiddle;
-    }
 
-    &-dot:first-child {
-      animation-name: dotFirst;
-    }
+      &-first {
+        animation-name: dotFirst;
+      }
 
-    &-dot:last-child {
-      animation-name: dotLast;
+      &-last {
+        animation-name: dotLast;
+      }
     }
   }
 
@@ -63,17 +63,15 @@
     overflow: hidden;
     position: relative;
     border-radius: 2px;
-    margin-right: .375rem;
+    margin-inline-end: .375rem;
     
-    &:before, &:after {
+    &:before,
+    &:after {
       display: block;
       content: " ";
       position: absolute;
-      top: 0;
-      right: 0;
-      bottom: 0;
-      left: 0;
-      background-color: var(--color);
+      inset: 0;
+      background-color: currentColor;
       border-radius: inherit;
     }
 
@@ -87,7 +85,7 @@
   }
 
   &-record {
-    margin-right: .375rem;
+    margin-inline-end: .375rem;
 
     &:before {
       content: " ";
@@ -95,13 +93,13 @@
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background-color: var(--color);
+      background-color: currentColor;
       animation: recordBlink 1.25s infinite;
     }
   }
 
   &-choosing-sticker {
-    margin-right: .375rem;
+    margin-inline-end: .375rem;
     flex: 0 0 auto;
     display: flex;
     align-items: center;
@@ -113,7 +111,7 @@
       border-radius: 50%;
       display: inline-block;
       vertical-align: middle;
-      border: 1px solid var(--color);
+      border: 1px solid currentColor;
       margin: 0 .0625rem;
       position: relative;
       animation: eye 1.8s ease-in-out infinite;
@@ -123,7 +121,7 @@
         display: block;
         width: .25rem;
         height: .25rem;
-        background-color: var(--color);
+        background-color: currentColor;
         border-radius: 50%;
         position: absolute;
         // left: 50%;

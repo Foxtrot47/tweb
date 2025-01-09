@@ -53,12 +53,14 @@ export type SlicedArraySerialized<T extends ItemType> = {
 };
 
 export default class SlicedArray<T extends ItemType> {
-  private slices: Slice<T>[]/*  = [[7,6,5],[4,3,2],[1,0,-1]] */;
+  public slices: Slice<T>[]/*  = [[7,6,5],[4,3,2],[1,0,-1]] */;
   private sliceConstructor: SliceConstructor<T>;
+  public compareValue: (a: T, b: T) => number;
 
   constructor() {
     // @ts-ignore
     this.sliceConstructor = SlicedArray.getSliceConstructor(this);
+    this.compareValue ??= compareValue;
 
     const first = this.constructSlice();
     // first.setEnd(SliceEnd.Bottom);
@@ -230,7 +232,7 @@ export default class SlicedArray<T extends ItemType> {
       let insertIndex = 0;
       for(const length = this.slices.length; insertIndex < length; ++insertIndex) { // * maybe should iterate from the end, could be faster ?
         const s = this.slices[insertIndex];
-        if(compareValue(slice[0], s[0]) === 1) {
+        if(this.compareValue(slice[0], s[0]) === 1) {
           break;
         }
       }
@@ -300,41 +302,47 @@ export default class SlicedArray<T extends ItemType> {
     return undefined;
   }
 
-  public findSliceOffset(maxId: T) {
+  // * offset will be exclusive, so if offsetId is in slice, then offset will be +1
+  public findOffsetInSlice(offsetId: T, slice: Slice<T>) {
+    for(let offset = 0; offset < slice.length; ++offset) {
+      if(this.compareValue(offsetId, slice[offset]) >= 0) {
+        /* if(!offset) { // because can't find 3 in [[5,4], [2,1]]
+          return undefined;
+        } */
+
+        return {
+          slice,
+          offset: offsetId === slice[offset] ? offset + 1 : offset
+        };
+      }
+    }
+  }
+
+  public findSliceOffset(maxId: T): ReturnType<SlicedArray<T>['findOffsetInSlice']> & {sliceIndex: number} {
     let slice: Slice<T>;
     for(let i = 0; i < this.slices.length; ++i) {
-      let offset = 0;
       slice = this.slices[i];
-      if(slice.length < 2) {
-        continue;
-      }
 
-      for(; offset < slice.length; ++offset) {
-        if(compareValue(maxId, slice[offset]) >= 0) {
-          /* if(!offset) { // because can't find 3 in [[5,4], [2,1]]
-            return undefined;
-          } */
-
-          return {
-            slice,
-            offset: maxId === slice[offset] ? offset : offset - 1
-          };
-        }
+      const found = this.findOffsetInSlice(maxId, slice);
+      if(found) {
+        return {
+          ...found,
+          sliceIndex: i
+        };
       }
     }
 
-    if(slice && slice.isEnd(SliceEnd.Top)) {
+    if(slice?.isEnd(SliceEnd.Top)) {
       return {
         slice,
-        offset: slice.length
+        offset: slice.length,
+        sliceIndex: this.slices.length - 1
       };
     }
-
-    return undefined;
   }
 
   // * https://core.telegram.org/api/offsets
-  public sliceMe(offsetId: T, add_offset: number, limit: number) {
+  public sliceMe(offsetId: T, addOffset: number, limit: number) {
     let slice = this.slice;
     let offset = 0;
     let sliceOffset = 0;
@@ -342,30 +350,32 @@ export default class SlicedArray<T extends ItemType> {
     if(offsetId) {
       const pos = this.findSliceOffset(offsetId);
       if(!pos) {
-        return undefined;
+        return;
       }
 
       slice = pos.slice;
       offset = sliceOffset = pos.offset;
 
-      if(slice.includes(offsetId)) {
-        sliceOffset += 1;
-      }
+      // if(slice.includes(offsetId)) {
+      //   sliceOffset += 1;
+      // }
 
       /* if(slice.includes(offsetId) && add_offset < 0) {
         add_offset += 1;
       } */
+    } else if(!slice.isEnd(SliceEnd.Bottom)) {
+      return;
     }
 
-    const sliceStart = Math.max(sliceOffset + add_offset, 0);
-    const sliceEnd = sliceOffset + add_offset + limit;
+    const sliceStart = Math.max(sliceOffset + addOffset, 0);
+    const sliceEnd = sliceOffset + addOffset + limit;
     // const fixHalfBackLimit = add_offset && !(limit / add_offset % 2) && (sliceEnd % 2) ? 1 : 0;
     // sliceEnd += fixHalfBackLimit;
 
     const sliced = slice.slice(sliceStart, sliceEnd) as Slice<T>;
 
-    const topWasMeantToLoad = add_offset < 0 ? limit + add_offset : limit;
-    const bottomWasMeantToLoad = Math.abs(add_offset);
+    const topWasMeantToLoad = addOffset < 0 ? limit + addOffset : limit;
+    const bottomWasMeantToLoad = Math.abs(addOffset);
 
     // can use 'slice' here to check because if it's end, then 'sliced' is out of 'slice'
     // useful when there is only 1 message in chat on its reopening

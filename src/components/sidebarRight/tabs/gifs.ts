@@ -4,6 +4,7 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
+import type {MyDocument} from '../../../lib/appManagers/appDocsManager';
 import {SliderSuperTab} from '../../slider';
 import InputSearch from '../../inputSearch';
 import animationIntersector, {AnimationItemGroup} from '../../animationIntersector';
@@ -11,7 +12,6 @@ import appSidebarRight from '..';
 import {AppInlineBotsManager} from '../../../lib/appManagers/appInlineBotsManager';
 import GifsMasonry from '../../gifsMasonry';
 import appImManager from '../../../lib/appManagers/appImManager';
-import type {MyDocument} from '../../../lib/appManagers/appDocsManager';
 import mediaSizes from '../../../helpers/mediaSizes';
 import findUpClassName from '../../../helpers/dom/findUpClassName';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
@@ -31,12 +31,15 @@ export default class AppGifsTab extends SliderSuperTab {
 
   private searchPromise: ReturnType<AppInlineBotsManager['getInlineResults']>;
 
-  protected init() {
+  public init() {
     this.container.id = 'search-gifs-container';
 
-    this.inputSearch = new InputSearch('SearchGifsTitle', (value) => {
-      this.reset();
-      this.search(value);
+    this.inputSearch = new InputSearch({
+      placeholder: 'SearchGifsTitle',
+      onChange: (value) => {
+        this.reset();
+        this.search(value);
+      }
     });
 
     this.title.replaceWith(this.inputSearch.container);
@@ -49,14 +52,22 @@ export default class AppGifsTab extends SliderSuperTab {
 
     this.masonry = new GifsMasonry(this.gifsDiv, ANIMATIONGROUP, this.scrollable);
     // this.backBtn.parentElement.append(this.inputSearch.container);
+
+    appSidebarRight.toggleSidebar(true).then(() => {
+      this.search('', true);
+
+      this.scrollable.onScrolledBottom = () => {
+        this.search(this.inputSearch.value, false);
+      };
+    });
   }
 
-  private onGifsClick = (e: MouseEvent | TouchEvent) => {
+  private onGifsClick = async(e: MouseEvent | TouchEvent) => {
     const target = findUpClassName(e.target, 'gif');
     if(!target) return;
 
     const fileId = target.dataset.docId;
-    if(appImManager.chat.input.sendMessageWithDocument(fileId)) {
+    if(await appImManager.chat.input.sendMessageWithDocument({document: fileId, target})) {
       if(mediaSizes.isMobile) {
         appSidebarRight.onCloseBtnClick();
       }
@@ -71,7 +82,7 @@ export default class AppGifsTab extends SliderSuperTab {
 
   public onCloseAfterTimeout() {
     this.reset();
-    this.gifsDiv.innerHTML = '';
+    this.gifsDiv.replaceChildren();
     animationIntersector.checkAnimations(undefined, ANIMATIONGROUP);
     this.inputSearch.remove();
     return super.onCloseAfterTimeout();
@@ -82,18 +93,6 @@ export default class AppGifsTab extends SliderSuperTab {
     this.nextOffset = '';
     this.loadedAll = false;
     this.masonry.clear();
-  }
-
-  public open() {
-    const ret = super.open();
-    appSidebarRight.toggleSidebar(true).then(() => {
-      this.search('', true);
-
-      this.scrollable.onScrolledBottom = () => {
-        this.search(this.inputSearch.value, false);
-      };
-    });
-    return ret;
   }
 
   public async search(query: string, newSearch = true) {
@@ -114,7 +113,7 @@ export default class AppGifsTab extends SliderSuperTab {
       this.searchPromise = null;
       this.nextOffset = next_offset;
       if(newSearch) {
-        this.gifsDiv.innerHTML = '';
+        this.gifsDiv.replaceChildren();
       }
 
       if(results.length) {

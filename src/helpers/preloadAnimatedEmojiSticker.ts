@@ -9,6 +9,7 @@ import lottieLoader from '../lib/rlottie/lottieLoader';
 import rootScope from '../lib/rootScope';
 import {getEmojiToneIndex} from '../vendor/emoji';
 import mediaSizes from './mediaSizes';
+import {getMiddleware} from './middleware';
 import {saveLottiePreview} from './saveLottiePreview';
 
 export default function preloadAnimatedEmojiSticker(emoji: string, width?: number, height?: number) {
@@ -21,6 +22,7 @@ export default function preloadAnimatedEmojiSticker(emoji: string, width?: numbe
     .then(async(blob) => {
       const mediaSize = mediaSizes.active.emojiSticker;
       const toneIndex = getEmojiToneIndex(emoji);
+      const middlewareHelper = getMiddleware();
       const animation = await lottieLoader.loadAnimationWorker({
         container: undefined,
         animationData: blob,
@@ -29,12 +31,14 @@ export default function preloadAnimatedEmojiSticker(emoji: string, width?: numbe
         name: 'doc' + doc.id,
         autoplay: false,
         loop: false,
-        toneIndex
-      }, 'none');
+        toneIndex,
+        group: 'none',
+        middleware: middlewareHelper.get()
+      });
 
       animation.addEventListener('firstFrame', () => {
         saveLottiePreview(doc, animation.canvas[0], toneIndex);
-        animation.remove();
+        middlewareHelper.destroy();
       }, {once: true});
     });
   });

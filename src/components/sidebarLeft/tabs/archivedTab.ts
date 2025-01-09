@@ -7,32 +7,44 @@
 import appDialogsManager from '../../../lib/appManagers/appDialogsManager';
 import {SliderSuperTab} from '../../slider';
 import {FOLDER_ID_ARCHIVE, REAL_FOLDER_ID} from '../../../lib/mtproto/mtproto_config';
+import StoriesList from '../../stories/list';
+import {render} from 'solid-js/web';
 
 export default class AppArchivedTab extends SliderSuperTab {
   private static filterId: REAL_FOLDER_ID = FOLDER_ID_ARCHIVE;
   private wasFilterId: number;
 
-  protected init() {
+  private storiesListContainer: HTMLDivElement;
+  private disposeStories: () => void;
+
+  public init() {
     this.wasFilterId = appDialogsManager.filterId;
 
     this.container.id = 'chats-archived-container';
     this.setTitle('ArchivedChats');
 
-    if(!appDialogsManager.sortedLists[AppArchivedTab.filterId]) {
-      const chatList = appDialogsManager.createChatList();
-      const scrollable = appDialogsManager.generateScrollable(chatList, {
+    this.header.classList.add('can-have-forum');
+    this.content.classList.add('can-have-forum');
+
+    if(!appDialogsManager.xds[AppArchivedTab.filterId]) {
+      const {ul, scrollable} = appDialogsManager.l({
         title: undefined,
         id: AppArchivedTab.filterId,
         localId: FOLDER_ID_ARCHIVE
       });
-      scrollable.container.append(chatList);
-      appDialogsManager.setListClickListener(chatList, null, true);
-      // appDialogsManager.setListClickListener(archivedChatList, null, true); // * to test peer changing
+      scrollable.append(ul);
     }
 
-    const scrollable = appDialogsManager.scrollables[AppArchivedTab.filterId];
+    const storiesListContainer = this.storiesListContainer = document.createElement('div');
+    storiesListContainer.classList.add('stories-list');
+
+    this.header.after(storiesListContainer);
+
+    const scrollable = appDialogsManager.xds[AppArchivedTab.filterId].scrollable;
     this.scrollable.container.replaceWith(scrollable.container);
-    this.scrollable = scrollable;
+    scrollable.attachBorderListeners(this.container);
+    // ! DO NOT UNCOMMENT NEXT LINE - chats will stop loading on scroll after closing the tab
+    // this.scrollable = scrollable;
 
     return appDialogsManager.setFilterIdAndChangeTab(AppArchivedTab.filterId).then(({cached, renderPromise}) => {
       if(cached) {
@@ -41,17 +53,34 @@ export default class AppArchivedTab extends SliderSuperTab {
     });
   }
 
+  private renderStories() {
+    this.disposeStories = render(() => {
+      return StoriesList({
+        foldInto: this.header,
+        setScrolledOn: this.container,
+        getScrollable: () => appDialogsManager.xds[AppArchivedTab.filterId].scrollable.container,
+        listenWheelOn: this.content,
+        archive: true,
+        offsetX: -84
+      });
+    }, this.storiesListContainer);
+  }
+
   // вообще, так делать нельзя, но нет времени чтобы переделать главный чатлист на слайд...
   onOpenAfterTimeout() {
-    appDialogsManager.sortedLists[this.wasFilterId].clear();
+    this.renderStories();
+    appDialogsManager.xds[this.wasFilterId].clear();
   }
 
   onClose() {
+    this.scrollable.onAdditionalScroll = undefined;
     appDialogsManager.setFilterIdAndChangeTab(this.wasFilterId);
   }
 
   onCloseAfterTimeout() {
-    appDialogsManager.sortedLists[AppArchivedTab.filterId].clear();
+    this.disposeStories?.();
+    this.disposeStories = undefined;
+    appDialogsManager.xds[AppArchivedTab.filterId].clear();
     return super.onCloseAfterTimeout();
   }
 }

@@ -28,6 +28,7 @@ export default class ProgressivePreloader {
   public isUpload = false;
   private cancelable = true;
   private streamable = false;
+  private rtmp = false;
   private tryAgainOnFail = true;
   private attachMethod: 'append' | 'prepend' = 'append';
 
@@ -39,6 +40,7 @@ export default class ProgressivePreloader {
     isUpload: ProgressivePreloader['isUpload'],
     cancelable: ProgressivePreloader['cancelable'],
     streamable: ProgressivePreloader['streamable'],
+    rtmp: ProgressivePreloader['rtmp'],
     tryAgainOnFail: ProgressivePreloader['tryAgainOnFail'],
     attachMethod: ProgressivePreloader['attachMethod']
   }>) {
@@ -57,7 +59,11 @@ export default class ProgressivePreloader {
   }> = {}) {
     if(!this.preloader) {
       this.preloader = document.createElement('div');
-      this.preloader.classList.add('preloader-container');
+      if(this.rtmp) {
+        this.preloader.classList.add('preloader-container-rtmp');
+      } else {
+        this.preloader.classList.add('preloader-container');
+      }
 
       if(options.color) {
         this.preloader.classList.add('preloader-' + options.color);
@@ -82,12 +88,22 @@ export default class ProgressivePreloader {
 
     this.constructContainer();
 
-    this.preloader.innerHTML = `
-    <div class="you-spin-me-round">
-    <svg xmlns="http://www.w3.org/2000/svg" class="preloader-circular" viewBox="${this.streamable ? '25 25 50 50' : '27 27 54 54'}">
-    <circle class="preloader-path-new" cx="${this.streamable ? '50' : '54'}" cy="${this.streamable ? '50' : '54'}" r="${this.streamable ? 19 : 24}" fill="none" stroke-miterlimit="10"/>
-    </svg>
-    </div>`;
+    if(this.rtmp) {
+      this.preloader.innerHTML = `
+      <div class="loading-wrap is-loading">
+        <div class="loading"></div>
+        <div class="loading_bezel-wrap">
+          <div class="loading"></div>
+        </div>
+      </div>`;
+    } else {
+      this.preloader.innerHTML = `
+      <div class="you-spin-me-round">
+      <svg xmlns="http://www.w3.org/2000/svg" class="preloader-circular" viewBox="${this.streamable ? '25 25 50 50' : '27 27 54 54'}">
+      <circle class="preloader-path-new" cx="${this.streamable ? '50' : '54'}" cy="${this.streamable ? '50' : '54'}" r="${this.streamable ? 19 : 24}" fill="none" stroke-miterlimit="10"/>
+      </svg>
+      </div>`;
+    }
 
     if(this.streamable) {
       this.totalLength = 118.61124420166016;
@@ -129,13 +145,9 @@ export default class ProgressivePreloader {
     }
 
     if(this.preloader.classList.contains('manual')) {
-      if(this.loadFunc) {
-        this.loadFunc(e);
-      }
+      this.loadFunc?.(e);
     } else {
-      if(this.promise && this.promise.cancel) {
-        this.promise.cancel();
-      }
+      this.promise?.cancel?.();
     }
   };
 
@@ -199,25 +211,25 @@ export default class ProgressivePreloader {
     .then(() => onEnd(null))
     .catch((err) => onEnd(err));
 
-    if(promise.addNotifyListener) {
-      promise.addNotifyListener((details: {done: number, total: number}) => {
-        /* if(details.done >= details.total) {
-          onEnd();
-        } */
+    promise.addNotifyListener?.((details: {done: number, total: number}) => {
+      /* if(details.done >= details.total) {
+        onEnd();
+      } */
 
-        if(tempId !== this.tempId) return;
+      if(tempId !== this.tempId) return;
 
-        // console.log('preloader download', promise, details);
-        const percents = details.done / details.total * 100;
-        this.setProgress(percents);
-      });
-    }
+      // console.log('preloader download', promise, details);
+      const percents = details.done / details.total * 100;
+      this.setProgress(percents);
+    });
   }
 
   public attach(elem: Element, reset = false, promise?: CancellablePromise<any>) {
-    if(this.construct) {
-      this.construct();
+    if(!this.detached && (!this.preloader || !this.preloader.classList.contains('manual'))) {
+      return;
     }
+
+    this.construct?.();
 
     if(this.preloader.parentElement) {
       this.preloader.classList.remove('manual');
@@ -237,7 +249,13 @@ export default class ProgressivePreloader {
       }
     }
 
-    SetTransition(this.preloader, 'is-visible', true, TRANSITION_TIME, undefined, useRafs);
+    SetTransition({
+      element: this.preloader,
+      className: 'is-visible',
+      forwards: true,
+      duration: TRANSITION_TIME,
+      useRafs
+    });
 
     if(this.cancelable && reset) {
       this.setProgress(0);
@@ -266,9 +284,16 @@ export default class ProgressivePreloader {
       //   return;
       // }
 
-      SetTransition(this.preloader, 'is-visible', false, TRANSITION_TIME, () => {
-        this.preloader.remove();
-      }, 1);
+      SetTransition({
+        element: this.preloader,
+        className: 'is-visible',
+        forwards: false,
+        duration: TRANSITION_TIME,
+        onTransitionEnd: () => {
+          this.preloader.remove();
+        },
+        useRafs: 1
+      });
       // });
       // })/* , 5e3) */;
     }
@@ -285,9 +310,7 @@ export default class ProgressivePreloader {
     }
 
     try {
-      if(!this.totalLength) {
-        this.totalLength = this.circle.getTotalLength();
-      }
+      this.totalLength ||= this.circle.getTotalLength();
 
       // console.log('setProgress', (percents / 100 * totalLength));
       this.circle.style.strokeDasharray = '' + Math.max(5, percents / 100 * this.totalLength) + ', ' + this.totalLength;

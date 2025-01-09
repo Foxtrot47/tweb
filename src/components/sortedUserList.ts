@@ -4,7 +4,8 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import appDialogsManager, {AppDialogsManager, DialogDom} from '../lib/appManagers/appDialogsManager';
+import type LazyLoadQueue from './lazyLoadQueue';
+import appDialogsManager, {AppDialogsManager, DialogDom, DialogElement, DialogElementSize} from '../lib/appManagers/appDialogsManager';
 import {getHeavyAnimationPromise} from '../hooks/useHeavyAnimationCheck';
 import isInDOM from '../helpers/dom/isInDOM';
 import positionElementByIndex from '../helpers/dom/positionElementByIndex';
@@ -14,24 +15,27 @@ import SortedList, {SortedElementBase} from '../helpers/sortedList';
 import safeAssign from '../helpers/object/safeAssign';
 import {AppManagers} from '../lib/appManagers/managers';
 import getUserStatusString from './wrappers/getUserStatusString';
-import type LazyLoadQueue from './lazyLoadQueue';
+import getChatMembersString from './wrappers/getChatMembersString';
+import wrapParticipantRank from './wrappers/participantRank';
+import getParticipantRank from '../lib/appManagers/utils/chats/getParticipantRank';
+import {Middleware, MiddlewareHelper} from '../helpers/middleware';
 
-interface SortedUser extends SortedElementBase {
-  dom: DialogDom
+interface SortedUser extends SortedElementBase<PeerId> {
+  dom: DialogDom,
+  dialogElement: DialogElement
 }
 
 export default class SortedUserList extends SortedList<SortedUser> {
   protected static SORT_INTERVAL = 30e3;
   public list: HTMLUListElement;
+  public ranks: Map<PeerId, ReturnType<typeof getParticipantRank>> = new Map();
 
   protected lazyLoadQueue: LazyLoadQueue;
-  protected avatarSize = 48;
+  protected avatarSize: DialogElementSize = 'abitbigger';
   protected rippleEnabled = true;
   protected autonomous = true;
   protected createChatListOptions: Parameters<AppDialogsManager['createChatList']>[0];
   protected onListLengthChange: () => void;
-  protected getIndex: (element: SortedUser) => number;
-  protected onUpdate: (element: SortedUser) => void;
   protected managers: AppManagers;
 
   constructor(options: Partial<{
@@ -44,17 +48,23 @@ export default class SortedUserList extends SortedList<SortedUser> {
     getIndex: SortedUserList['getIndex'],
     onUpdate: SortedUserList['onUpdate']
   }> & {
-    managers: SortedUserList['managers']
+    managers: SortedUserList['managers'],
+    middleware: Middleware
   }) {
     super({
-      getIndex: options.getIndex || ((element) => this.managers.appUsersManager.getUserStatusForSort(element.id)),
+      getIndex: options.getIndex || ((element) => element.id.isAnyChat() ? 0 : this.managers.appUsersManager.getUserStatusForSort(element.id)),
       onDelete: (element) => {
-        element.dom.listEl.remove();
-        this.onListLengthChange && this.onListLengthChange();
+        element.dialogElement.remove();
+        this.onListLengthChange?.();
       },
       onUpdate: options.onUpdate || (async(element) => {
-        const status = getUserStatusString(await this.managers.appUsersManager.getUser(element.id));
-        replaceContent(element.dom.lastMessageSpan, status);
+        if(element.id.isAnyChat()) {
+          const status = await getChatMembersString(element.id.toChatId(), this.managers);
+          replaceContent(element.dom.lastMessageSpan, status);
+        } else {
+          const status = getUserStatusString(await this.managers.appUsersManager.getUser(element.id));
+          replaceContent(element.dom.lastMessageSpan, status);
+        }
       }),
       onSort: (element, idx) => {
         const willChangeLength = element.dom.listEl.parentElement !== this.list;
@@ -65,21 +75,35 @@ export default class SortedUserList extends SortedList<SortedUser> {
         }
       },
       onElementCreate: (base) => {
-        const {dom} = appDialogsManager.addDialogNew({
+        const dialogElement = appDialogsManager.addDialogNew({
           peerId: base.id,
           container: false,
           avatarSize: this.avatarSize,
           autonomous: this.autonomous,
           meAsSaved: false,
           rippleEnabled: this.rippleEnabled,
-          lazyLoadQueue: this.lazyLoadQueue
+          wrapOptions: {
+            lazyLoadQueue: this.lazyLoadQueue,
+            middleware: this.middlewareHelper.get()
+          },
+          withStories: true
         });
 
-        (base as SortedUser).dom = dom;
+        const rank = this.ranks.get(base.id);
+        if(rank) {
+          dialogElement.titleRight.replaceChildren(wrapParticipantRank(rank));
+        }
+
+        (base as SortedUser).dom = dialogElement.dom;
+        (base as SortedUser).dialogElement = dialogElement;
         return base as SortedUser;
       },
       updateElementWith: fastRaf,
       updateListWith: async(callback) => {
+        if(!Array.from(this.elements.values()).some((element) => element.id.isUser())) {
+          return callback(false);
+        }
+
         if(!isInDOM(this.list)) {
           return callback(false);
         }
@@ -91,7 +115,8 @@ export default class SortedUserList extends SortedList<SortedUser> {
         }
 
         callback(true);
-      }
+      },
+      middleware: options.middleware
     });
 
     safeAssign(this, options);

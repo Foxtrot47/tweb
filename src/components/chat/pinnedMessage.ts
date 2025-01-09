@@ -23,12 +23,14 @@ import throttle from '../../helpers/schedulers/throttle';
 import {AppManagers} from '../../lib/appManagers/managers';
 import {Message} from '../../layer';
 import {logger} from '../../lib/logger';
+import PopupElement from '../popups';
+import {getMiddleware, MiddlewareHelper} from '../../helpers/middleware';
 
 class AnimatedSuper {
   static DURATION = 200;
   static BASE_CLASS = 'animated-super';
   container: HTMLDivElement;
-  rows: {[index: string]: {element: HTMLElement, timeout?: number, new?: true}} = {};
+  rows: {[index: string]: {element: HTMLElement, middleware: MiddlewareHelper, timeout?: number, new?: true}} = {};
   clearTimeout: number;
 
   constructor() {
@@ -41,7 +43,7 @@ class AnimatedSuper {
     const row = document.createElement('div');
     const isFirst = !Object.keys(this.rows).length && !animateFirst;
     row.className = AnimatedSuper.BASE_CLASS + '-row' + (isFirst ? '' : ' is-hiding hide');
-    this.rows[index] = {element: row, new: true};
+    this.rows[index] = {element: row, middleware: row.middlewareHelper = getMiddleware(), new: true};
     this.container.append(row);
     return row;
   }
@@ -49,6 +51,7 @@ class AnimatedSuper {
   public clearRow(index: number) {
     if(!this.rows[index]) return;
     this.rows[index].element.remove();
+    this.rows[index].middleware.destroy();
     delete this.rows[index];
   }
 
@@ -118,6 +121,12 @@ class AnimatedSuper {
     } */
 
     this.clearRows(index);
+  }
+
+  public destroy() {
+    for(const i in this.rows) {
+      this.clearRow(+i);
+    }
   }
 }
 
@@ -212,7 +221,15 @@ class AnimatedCounter {
     // this.clear(number);
     this.previousNumber = number;
   }
+
+  destroy() {
+    this.decimals.forEach((decimal) => {
+      decimal.animatedSuper.destroy();
+    });
+  }
 }
+
+const ALWAYS_FLOATING = false;
 
 export default class ChatPinnedMessage {
   private static LOAD_COUNT = 50;
@@ -243,11 +260,11 @@ export default class ChatPinnedMessage {
   private animatedCounter: AnimatedCounter;
 
   private listenerSetter: ListenerSetter;
-  private scrollDownListenerSetter: ListenerSetter = null;
+  private scrollDownListenerSetter: ListenerSetter;
 
   public hidden = false;
 
-  private getCurrentIndexPromise: Promise<any> = null;
+  private getCurrentIndexPromise: Promise<any>;
   private btnOpen: HTMLButtonElement;
 
   private setPinnedMessage: () => void;
@@ -275,13 +292,15 @@ export default class ChatPinnedMessage {
       divAndCaption: dAC,
       onClose: async() => {
         if(await managers.appPeersManager.canPinMessage(this.chat.peerId)) {
-          new PopupPinMessage(this.chat.peerId, this.pinnedMid, true);
+          PopupElement.createPopup(PopupPinMessage, this.chat.peerId, this.pinnedMid, true);
         } else {
-          new PopupPinMessage(this.chat.peerId, 0, true);
+          PopupElement.createPopup(PopupPinMessage, this.chat.peerId, 0, true);
         }
 
         return false;
-      }
+      },
+      floating: ALWAYS_FLOATING,
+      height: 52
     });
 
     this.pinnedMessageBorder = new PinnedMessageBorder();
@@ -341,11 +360,14 @@ export default class ChatPinnedMessage {
     this.setPinnedMessage = debounce(() => this._setPinnedMessage(), 100, true, true);
     this.setCorrectIndexThrottled = throttle(this.setCorrectIndex.bind(this), 100, false);
 
-    this.isStatic = this.chat.type === 'discussion';
+    this.isStatic = !this.chat.isPinnedMessagesNeeded();
   }
 
   public destroy() {
-    this.pinnedMessageContainer.divAndCaption.container.remove();
+    this.animatedMedia.destroy();
+    this.animatedSubtitle.destroy();
+    this.animatedCounter.destroy();
+    this.pinnedMessageContainer.container.remove();
     this.pinnedMessageContainer.toggle(true);
     this.listenerSetter.removeAll();
     this.unsetScrollDownListener(false);
@@ -354,6 +376,8 @@ export default class ChatPinnedMessage {
   public setCorrectIndex(lastScrollDirection?: number) {
     if(this.isStatic) return;
     // return;
+
+    this.debug && this.log('setCorrectIndex', lastScrollDirection);
 
     if(this.locked || this.hidden/*  || this.chat.setPeerPromise || this.chat.bubbles.messagesQueuePromise */) {
       return;
@@ -371,7 +395,7 @@ export default class ChatPinnedMessage {
     // return;
 
     const mid = el.dataset.mid;
-    if(el && mid !== undefined) {
+    if(mid !== undefined) {
       // this.log('setCorrectIndex will test mid:', mid);
       this.testMid(+mid, lastScrollDirection);
     }
@@ -392,11 +416,7 @@ export default class ChatPinnedMessage {
       // currentIndex = 0;
       currentIndex = this.mids.length - 1 + this.offsetIndex;
     } else {
-      if(!this.getCurrentIndexPromise) {
-        this.getCurrentIndexPromise = this.getCurrentIndex(mid, lastScrollDirection !== undefined);
-      }
-
-      return;
+      return this.getCurrentIndexPromise ??= this.getCurrentIndex(mid, lastScrollDirection !== undefined);
     }
 
     // const idx = Math.max(0, this.mids.indexOf(mid));
@@ -417,7 +437,7 @@ export default class ChatPinnedMessage {
 
       this.pinnedIndex = currentIndex;
       this.pinnedMid = this.mids.find((_mid) => _mid <= mid) || this.mids[this.mids.length - 1];
-      this.setPinnedMessage();
+      return this.setPinnedMessage();
     }
   }
 
@@ -440,21 +460,25 @@ export default class ChatPinnedMessage {
 
       let gotRest = false;
       const promises = [
-        this.managers.appMessagesManager.getSearch({
+        this.managers.appMessagesManager.getHistory({
           peerId: this.chat.peerId,
           inputFilter: {_: 'inputMessagesFilterPinned'},
-          maxId: mid,
+          offsetId: mid,
           limit: ChatPinnedMessage.LOAD_COUNT,
-          backLimit: ChatPinnedMessage.LOAD_COUNT
-        })
-        .then((r) => {
+          backLimit: ChatPinnedMessage.LOAD_COUNT,
+          threadId: this.chat.threadId,
+          needRealOffsetIdOffset: true
+        }).then((r) => {
           gotRest = true;
           return r;
         })
       ];
 
       if(!this.pinnedMaxMid) {
-        const promise = this.managers.appMessagesManager.getPinnedMessage(this.chat.peerId).then((p) => {
+        const promise = this.managers.appMessagesManager.getPinnedMessage(
+          this.chat.peerId,
+          this.chat.threadId
+        ).then((p) => {
           if(!p.maxId) return;
           this.pinnedMaxMid = p.maxId;
 
@@ -473,15 +497,17 @@ export default class ChatPinnedMessage {
 
       const result = (await Promise.all(promises))[0];
 
-      let backLimited = result.history.findIndex((message) => message.mid <= mid);
+      const history = result.history;
+
+      let backLimited = history.findIndex((_mid) => _mid <= mid);
       if(backLimited === -1) {
-        backLimited = result.history.length;
+        backLimited = history.length;
       }/*  else {
         backLimited -= 1;
       } */
 
-      this.offsetIndex = result.offset_id_offset ? result.offset_id_offset - backLimited : 0;
-      this.mids = result.history.map((message) => message.mid).slice();
+      this.offsetIndex = Math.max(0, result.offsetIdOffset) ? result.offsetIdOffset - backLimited : 0;
+      this.mids = history.slice();
       this.count = result.count;
 
       if(!this.count) {
@@ -504,11 +530,11 @@ export default class ChatPinnedMessage {
       this.setCorrectIndex(0);
     }
 
-    this.getCurrentIndexPromise = null;
+    this.getCurrentIndexPromise = undefined;
     // return result.offset_id_offset || 0;
   }
 
-  public setScrollDownListener() {
+  private setScrollDownListener() {
     this.waitForScrollBottom = true;
 
     if(!this.scrollDownListenerSetter) {
@@ -524,7 +550,7 @@ export default class ChatPinnedMessage {
 
     if(this.scrollDownListenerSetter) {
       this.scrollDownListenerSetter.removeAll();
-      this.scrollDownListenerSetter = null;
+      this.scrollDownListenerSetter = undefined;
     }
 
     if(refreshPosition) {
@@ -547,9 +573,7 @@ export default class ChatPinnedMessage {
       // await this.chat.bubbles.scrollable.scrollLockedPromise;
       await getHeavyAnimationPromise();
 
-      if(this.getCurrentIndexPromise) {
-        await this.getCurrentIndexPromise;
-      }
+      this.getCurrentIndexPromise && await this.getCurrentIndexPromise;
 
       this.debug && this.log('handleFollowingPinnedMessage: unlock');
       this.locked = false;
@@ -568,13 +592,13 @@ export default class ChatPinnedMessage {
     }
   }
 
-  public async followPinnedMessage(mid: number) {
-    const message = await this.chat.getMessage(mid);
+  public followPinnedMessage(mid: number) {
+    const message = this.chat.getMessage(mid);
     if(!message) {
       return;
     }
 
-    this.chat.setMessageId(mid);
+    this.chat.setMessageId({lastMsgId: mid});
     (this.chat.setPeerPromise || Promise.resolve()).then(() => { // * debounce fast clicker
       this.handleFollowingPinnedMessage();
       this.testMid(this.pinnedIndex >= (this.count - 1) ? this.pinnedMaxMid : mid - 1);
@@ -592,7 +616,7 @@ export default class ChatPinnedMessage {
     const count = this.count;
     if(count) {
       const pinnedIndex = this.pinnedIndex;
-      const message = await this.chat.getMessage(this.pinnedMid);
+      const message = this.chat.getMessage(this.pinnedMid);
 
       // this.animatedCounter.prepareNumber(count);
 
@@ -618,18 +642,20 @@ export default class ChatPinnedMessage {
       // writeMediaTo.innerHTML = writeMediaTo.style.cssText = writeMediaTo.dataset.docId = '';
       const loadPromises: Promise<any>[] = [];
       const isMediaSet = await wrapReplyDivAndCaption({
-        title: undefined,
         titleEl: null,
-        subtitle: (message as Message.message).message,
         subtitleEl: writeTo,
         message,
         mediaEl: writeMediaTo,
-        loadPromises
+        loadPromises,
+        animationGroup: this.chat.animationGroup,
+        textColor: 'primary-text-color',
+        canTranslate: !message.pFlags.out,
+        middleware: this.animatedSubtitle.getRow(pinnedIndex).middlewareHelper.get()
       });
 
       await Promise.all(loadPromises);
 
-      this.pinnedMessageContainer.divAndCaption.container.classList.toggle('is-media', isMediaSet);
+      this.pinnedMessageContainer.container.classList.toggle('is-media', isMediaSet);
 
       // if(this.wasPinnedIndex !== this.pinnedIndex) {
       this.animatedSubtitle.animate(pinnedIndex, this.wasPinnedIndex);
@@ -643,13 +669,13 @@ export default class ChatPinnedMessage {
 
       this.pinnedMessageBorder.render(count, count - pinnedIndex - 1);
       this.wasPinnedIndex = pinnedIndex;
-      this.pinnedMessageContainer.divAndCaption.container.dataset.mid = '' + message.mid;
+      this.pinnedMessageContainer.container.dataset.mid = '' + message.mid;
     } else {
       this.pinnedMessageContainer.toggle(true);
       this.wasPinnedIndex = 0;
     }
 
-    this.pinnedMessageContainer.divAndCaption.container.classList.toggle('is-many', this.count > 1);
+    this.pinnedMessageContainer.container.classList.toggle('is-many', this.count > 1);
     // });
   }
 }

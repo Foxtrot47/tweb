@@ -4,33 +4,20 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-// import { IS_MOBILE_SAFARI, IS_SAFARI } from "../environment/userAgent";
 import cancelEvent from '../helpers/dom/cancelEvent';
+import Icon from './icon';
 import InputField, {InputFieldOptions} from './inputField';
 
-export default class PasswordInputField extends InputField {
+export class PasswordInputHelpers {
   public passwordVisible = false;
   public toggleVisible: HTMLElement;
   public onVisibilityClickAdditional: () => void;
 
-  constructor(options: InputFieldOptions = {}) {
-    super({
-      plainText: true,
-      ...options
-    });
-
-    const input = this.input as HTMLInputElement;
+  constructor(public container: HTMLElement, public input: HTMLInputElement) {
     input.type = 'password';
     input.setAttribute('required', '');
     input.name = 'notsearch_password';
     input.autocomplete = 'off';
-
-    /* if(IS_SAFARI && !IS_MOBILE_SAFARI) {
-      input.setAttribute('readonly', '');
-      input.addEventListener('focus', () => {
-        input.removeAttribute('readonly');
-      }, {once: true});
-    } */
 
     // * https://stackoverflow.com/a/35949954/6758968
     const stealthy = document.createElement('input');
@@ -40,11 +27,19 @@ export default class PasswordInputField extends InputField {
     input.parentElement.prepend(stealthy);
     input.parentElement.insertBefore(stealthy.cloneNode(), input.nextSibling);
 
-    const toggleVisible = this.toggleVisible = document.createElement('span');
-    toggleVisible.classList.add('toggle-visible', 'tgico');
+    /* if(IS_SAFARI && !IS_MOBILE_SAFARI) {
+      input.setAttribute('readonly', '');
+      input.addEventListener('focus', () => {
+        input.removeAttribute('readonly');
+      }, {once: true});
+    } */
 
-    this.container.classList.add('input-field-password');
-    this.container.append(toggleVisible);
+    const toggleVisible = this.toggleVisible = document.createElement('span');
+    toggleVisible.classList.add('toggle-visible');
+    toggleVisible.append(Icon('eye1'));
+
+    container.classList.add('input-field-password');
+    container.append(toggleVisible);
 
     toggleVisible.addEventListener('click', this.onVisibilityClick);
     toggleVisible.addEventListener('touchend', this.onVisibilityClick);
@@ -54,8 +49,22 @@ export default class PasswordInputField extends InputField {
     cancelEvent(e);
     this.passwordVisible = !this.passwordVisible;
 
-    this.toggleVisible.classList.toggle('eye-hidden', this.passwordVisible);
+    this.toggleVisible.replaceChildren(Icon(this.passwordVisible ? 'eye2' : 'eye1'));
     (this.input as HTMLInputElement).type = this.passwordVisible ? 'text' : 'password';
-    this.onVisibilityClickAdditional && this.onVisibilityClickAdditional();
+    this.onVisibilityClickAdditional?.();
   };
+}
+
+export default class PasswordInputField extends InputField {
+  public helpers: PasswordInputHelpers;
+
+  constructor(options: InputFieldOptions = {}) {
+    super({
+      plainText: true,
+      allowStartingSpace: true,
+      ...options
+    });
+
+    this.helpers = new PasswordInputHelpers(this.container, this.input as HTMLInputElement);
+  }
 }

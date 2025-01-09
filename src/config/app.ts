@@ -9,24 +9,28 @@
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-import type {DcId} from '../types';
+import type {TrueDcId} from '../types';
 
-export const MAIN_DOMAIN = 'web.telegram.org';
+export const MAIN_DOMAINS = ['web.telegram.org', 'webk.telegram.org'];
+export const DEFAULT_BACKGROUND_SLUG = 'pattern';
+
+const threads = Math.min(4, navigator.hardwareConcurrency ?? 4);
 
 const App = {
-  id: +process.env.API_ID,
-  hash: process.env.API_HASH,
-  version: process.env.VERSION,
-  versionFull: process.env.VERSION_FULL,
-  build: +process.env.BUILD,
-  langPackVersion: '0.4.5',
-  langPack: 'macos',
+  id: +import.meta.env.VITE_API_ID,
+  hash: import.meta.env.VITE_API_HASH,
+  version: import.meta.env.VITE_VERSION,
+  versionFull: import.meta.env.VITE_VERSION_FULL,
+  build: +import.meta.env.VITE_BUILD,
+  langPackVersion: '6.1.4',
+  langPack: 'webk',
   langPackCode: 'en',
-  domains: [MAIN_DOMAIN] as string[],
-  baseDcId: 2 as DcId,
-  isMainDomain: location.hostname === MAIN_DOMAIN,
+  domains: MAIN_DOMAINS,
+  baseDcId: 2 as TrueDcId,
+  isMainDomain: MAIN_DOMAINS.includes(location.hostname),
   suffix: 'K',
-  cryptoWorkers: 4
+  threads,
+  cryptoWorkers: threads
 };
 
 if(App.isMainDomain) { // use Webogram credentials then

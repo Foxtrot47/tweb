@@ -9,26 +9,58 @@ import PopupElement, {addCancelButton} from '.';
 import PopupPeer, {PopupPeerButtonCallbackCheckboxes, PopupPeerOptions} from './peer';
 import {ChatType} from '../chat/chat';
 import {i18n, LangPackKey} from '../../lib/langPack';
-import PeerTitle from '../peerTitle';
 import hasRights from '../../lib/appManagers/utils/chats/hasRights';
-import filterAsync from '../../helpers/array/filterAsync';
+import wrapPeerTitle from '../wrappers/peerTitle';
+import {Message, MessageMedia} from '../../layer';
+import {formatFullSentTime} from '../../helpers/date';
+import tsNow from '../../helpers/tsNow';
+import PopupDeleteMegagroupMessages from './deleteMegagroupMessages';
+import getParticipantPeerId from '../../lib/appManagers/utils/chats/getParticipantPeerId';
 
 export default class PopupDeleteMessages {
-  constructor(private peerId: PeerId, private mids: number[], private type: ChatType, private onConfirm?: () => void) {
+  constructor(
+    private peerId: PeerId,
+    private mids: number[],
+    private type: ChatType,
+    private onConfirm?: () => void,
+    private threadId?: number
+  ) {
     this.construct();
   }
 
   private async construct() {
-    let {peerId, mids, type, onConfirm} = this;
-
-    const peerTitleElement = new PeerTitle({peerId}).element;
-
-    const managers = PopupElement.MANAGERS;
+    let {peerId, mids, type, onConfirm, threadId} = this;
 
     mids = mids.slice();
-    const callback = (checked: PopupPeerButtonCallbackCheckboxes, revoke?: boolean) => {
-      onConfirm && onConfirm();
-      if(type === 'scheduled') {
+
+    const managers = PopupElement.MANAGERS;
+    const peerTitleElement = await wrapPeerTitle({peerId, threadId, onlyFirstName: true});
+    const messages = await Promise.all(mids.map((mid) => managers.appMessagesManager.getMessageByPeer(peerId, mid)));
+
+    const isMegagroup = await managers.appPeersManager.isMegagroup(peerId);
+    if(isMegagroup && !messages.some((message) => message.pFlags.out)) {
+      const participants = await managers.appProfileManager.getParticipants({
+        id: peerId.toChatId(),
+        filter: {_: 'channelParticipantsAdmins'},
+        limit: 100
+      });
+
+      const foundAdmin = messages.some((message) => {
+        return participants.participants.some((participant) => getParticipantPeerId(participant) === message.fromId);
+      });
+
+      if(!foundAdmin) {
+        PopupElement.createPopup(PopupDeleteMegagroupMessages, {
+          messages,
+          onConfirm: this.onConfirm
+        });
+        return;
+      }
+    }
+
+    const callback = (e: MouseEvent, checked: PopupPeerButtonCallbackCheckboxes, revoke?: boolean) => {
+      onConfirm?.();
+      if(type === ChatType.Scheduled) {
         managers.appMessagesManager.deleteScheduledMessages(peerId, mids);
       } else {
         managers.appMessagesManager.deleteMessages(peerId, mids, !!checked.size || revoke);
@@ -49,55 +81,67 @@ export default class PopupDeleteMessages {
       titleArgs = [i18n('messages', [mids.length])];
     }
 
-    if(await managers.appPeersManager.isMegagroup(peerId)) {
+    if(isMegagroup) {
       description = mids.length === 1 ? 'AreYouSureDeleteSingleMessageMega' : 'AreYouSureDeleteFewMessagesMega';
     } else {
       description = mids.length === 1 ? 'AreYouSureDeleteSingleMessage' : 'AreYouSureDeleteFewMessages';
     }
 
-    if(peerId === rootScope.myId || type === 'scheduled') {
+    if(peerId === rootScope.myId || type === ChatType.Scheduled) {
 
+    } else if(peerId.isUser()) {
+      checkboxes.push({
+        text: 'DeleteMessagesOptionAlso',
+        textArgs: [peerTitleElement]
+      });
     } else {
-      if(peerId.isUser()) {
-        checkboxes.push({
-          text: 'DeleteMessagesOptionAlso',
-          textArgs: [peerTitleElement]
+      const chat = await managers.appChatsManager.getChat(peerId.toChatId());
+
+      const _hasRights = hasRights(chat, 'delete_messages');
+      if(chat._ === 'chat') {
+        const canRevoke = _hasRights ? mids.slice() : mids.filter((mid, idx) => {
+          const message = messages[idx];
+          return message.fromId === rootScope.myId;
         });
-      } else {
-        const chat = await managers.appChatsManager.getChat(peerId.toChatId());
 
-        const _hasRights = hasRights(chat, 'delete_messages');
-        if(chat._ === 'chat') {
-          const canRevoke = _hasRights ? mids.slice() : await filterAsync(mids, async(mid) => {
-            const message = await managers.appMessagesManager.getMessageByPeer(peerId, mid);
-            return message.fromId === rootScope.myId;
-          });
+        if(canRevoke.length) {
+          if(canRevoke.length === mids.length) {
+            checkboxes.push({
+              text: 'DeleteForAll'
+            });
+          } else {
+            checkboxes.push({
+              text: 'DeleteMessagesOption'
+            });
 
-          if(canRevoke.length) {
-            if(canRevoke.length === mids.length) {
-              checkboxes.push({
-                text: 'DeleteForAll'
-              });
-            } else {
-              checkboxes.push({
-                text: 'DeleteMessagesOption'
-              });
-
-              description = 'DeleteMessagesTextGroup';
-              descriptionArgs = [i18n('messages', [canRevoke.length])];
-              // description = `You can also delete the ${canRevoke.length} message${canRevoke.length > 1 ? 's' : ''} you sent from the inboxes of other group members by pressing "${buttonText}".`;
-            }
+            description = 'DeleteMessagesTextGroup';
+            descriptionArgs = [i18n('messages', [canRevoke.length])];
           }
-        } else {
-          buttons[0].callback = (checked) => callback(checked, true);
         }
+      } else {
+        let foundGiveaway: MessageMedia.messageMediaGiveaway;
+        messages.find((message) => {
+          return message &&
+            (message as Message.message).media?._ === 'messageMediaGiveaway' &&
+            !(message as Message.message).fwdFromId &&
+            (foundGiveaway = (message as Message.message).media as MessageMedia.messageMediaGiveaway);
+        });
+
+        if(foundGiveaway && foundGiveaway.until_date >= tsNow(true)) {
+          title = 'BoostingGiveawayDeleteMsgTitle';
+          description = 'BoostingGiveawayDeleteMsgText';
+          descriptionArgs = [formatFullSentTime(foundGiveaway.until_date, undefined, true)];
+        }
+
+        buttons[0].callback = (e, checked) => callback(e, checked, true);
       }
     }
 
     addCancelButton(buttons);
 
-    const popup = new PopupPeer('popup-delete-chat', {
+    const popup = PopupElement.createPopup(PopupPeer, 'popup-delete-chat', {
       peerId,
+      threadId,
       titleLangKey: title,
       titleLangArgs: titleArgs,
       descriptionLangKey: description,

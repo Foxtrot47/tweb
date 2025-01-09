@@ -23,10 +23,11 @@ import PopupElement from '../../popups';
 
 export default class AppContactsTab extends SliderSuperTab {
   private inputSearch: InputSearch;
-  private middleware: ReturnType<typeof getMiddleware>;
+  private middlewareHelperLoad: ReturnType<typeof getMiddleware>;
   private sortedUserList: SortedUserList;
+  private listsContainer: HTMLElement;
 
-  protected init() {
+  public init() {
     this.container.id = 'contacts-container';
 
     // this.list = appDialogsManager.createChatList(/* {avatarSize: 48, handheldsSize: 66} */);
@@ -38,8 +39,11 @@ export default class AppContactsTab extends SliderSuperTab {
       PopupElement.createPopup(PopupCreateContact);
     }, {listenerSetter: this.listenerSetter});
 
-    this.inputSearch = new InputSearch('Search', (value) => {
-      this.openContacts(value);
+    this.inputSearch = new InputSearch({
+      placeholder: 'Search',
+      onChange: (value) => {
+        this.openContacts(value);
+      }
     });
 
     this.listenerSetter.add(rootScope)('contacts_update', async(userId) => {
@@ -51,7 +55,12 @@ export default class AppContactsTab extends SliderSuperTab {
 
     this.title.replaceWith(this.inputSearch.container);
 
-    this.middleware = getMiddleware();
+    this.middlewareHelperLoad = getMiddleware();
+
+    const listsContainer = this.listsContainer = document.createElement('div');
+    this.scrollable.append(listsContainer);
+
+    this.openContacts();
 
     // preload contacts
     // appUsersManager.getContacts();
@@ -59,21 +68,27 @@ export default class AppContactsTab extends SliderSuperTab {
 
   protected createList() {
     const sortedUserList = new SortedUserList({
-      managers: this.managers
+      managers: this.managers,
+      middleware: this.middlewareHelper.get()
     });
     const list = sortedUserList.list;
     list.id = 'contacts';
     list.classList.add('contacts-container');
-    appDialogsManager.setListClickListener(list, () => {
-      this.close();
-    }, undefined, true);
+    appDialogsManager.setListClickListener({
+      list,
+      onFound: () => {
+        this.close();
+      },
+      withContext: undefined,
+      autonomous: true
+    });
     return sortedUserList;
   }
 
   protected onClose() {
-    this.middleware.clean();
+    this.middlewareHelperLoad.clean();
     /* // need to clear, and left 1 page for smooth slide
-    let pageCount = appPhotosManager.windowH / 72 * 1.25 | 0;
+    let pageCount = appPhotosManager.windowH / 56 * 1.25 | 0;
     (Array.from(this.list.children) as HTMLElement[]).slice(pageCount).forEach((el) => el.remove()); */
   }
 
@@ -83,15 +98,10 @@ export default class AppContactsTab extends SliderSuperTab {
   }
 
   public openContacts(query?: string) {
-    if(this.init) {
-      this.init();
-      this.init = null;
-    }
-
-    this.middleware.clean();
-    const middleware = this.middleware.get();
+    this.middlewareHelperLoad.clean();
+    const middleware = this.middlewareHelperLoad.get();
     this.scrollable.onScrolledBottom = null;
-    this.scrollable.container.textContent = '';
+    this.listsContainer.replaceChildren();
 
     this.managers.appUsersManager.getContactsPeerIds(query, undefined, 'online').then((contacts) => {
       if(!middleware()) {
@@ -101,7 +111,7 @@ export default class AppContactsTab extends SliderSuperTab {
       const sortedUserList = this.sortedUserList = this.createList();
 
       let renderPage = () => {
-        const pageCount = windowSize.height / 72 * 1.25 | 0;
+        const pageCount = windowSize.height / 56 * 1.25 | 0;
         const arr = contacts.splice(0, pageCount); // надо splice!
 
         arr.forEach((peerId) => {
@@ -123,12 +133,7 @@ export default class AppContactsTab extends SliderSuperTab {
         }
       };
 
-      replaceContent(this.scrollable.container, sortedUserList.list);
+      replaceContent(this.listsContainer, sortedUserList.list);
     });
-  }
-
-  public open() {
-    this.openContacts();
-    return super.open();
   }
 }

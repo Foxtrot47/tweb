@@ -5,57 +5,54 @@
  */
 
 import type ListenerSetter from '../../../../helpers/listenerSetter';
-import {SettingSection} from '../..';
 import {LangPackKey} from '../../../../lib/langPack';
 import CheckboxField from '../../../checkboxField';
 import {SliderSuperTabEventable} from '../../../sliderTab';
+import Row, {CreateRowFromCheckboxField} from '../../../row';
+import SettingSection from '../../../settingSection';
+import {joinDeepPath} from '../../../../helpers/object/setDeepProperty';
 
 export function autoDownloadPeerTypeSection(type: 'photo' | 'video' | 'file', title: LangPackKey, listenerSetter: ListenerSetter) {
   const section = new SettingSection({name: title});
 
-  const key = 'settings.autoDownload.' + type + '.';
+  const key = joinDeepPath('settings', 'autoDownload', type);
   const contactsCheckboxField = new CheckboxField({
     text: 'AutodownloadContacts',
     name: 'contacts',
-    stateKey: key + 'contacts',
-    withRipple: true,
+    stateKey: joinDeepPath(key, 'contacts'),
     listenerSetter
   });
   const privateCheckboxField = new CheckboxField({
     text: 'AutodownloadPrivateChats',
     name: 'private',
-    stateKey: key + 'private',
-    withRipple: true,
+    stateKey: joinDeepPath(key, 'private'),
     listenerSetter
   });
   const groupsCheckboxField = new CheckboxField({
     text: 'AutodownloadGroupChats',
     name: 'groups',
-    stateKey: key + 'groups',
-    withRipple: true,
+    stateKey: joinDeepPath(key, 'groups'),
     listenerSetter
   });
   const channelsCheckboxField = new CheckboxField({
     text: 'AutodownloadChannels',
     name: 'channels',
-    stateKey: key + 'channels',
-    withRipple: true,
+    stateKey: joinDeepPath(key, 'channels'),
     listenerSetter
   });
 
   section.content.append(
-    contactsCheckboxField.label,
-    privateCheckboxField.label,
-    groupsCheckboxField.label,
-    channelsCheckboxField.label
+    CreateRowFromCheckboxField(contactsCheckboxField).container,
+    CreateRowFromCheckboxField(privateCheckboxField).container,
+    CreateRowFromCheckboxField(groupsCheckboxField).container,
+    CreateRowFromCheckboxField(channelsCheckboxField).container
   );
 
   return section;
 }
 
 export default class AppAutoDownloadPhotoTab extends SliderSuperTabEventable {
-  protected init() {
-    this.header.classList.add('with-border');
+  public init() {
     this.setTitle('AutoDownloadPhotos');
 
     const section = autoDownloadPeerTypeSection('photo', 'AutoDownloadPhotosTitle', this.listenerSetter);

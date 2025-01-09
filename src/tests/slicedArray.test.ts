@@ -1,4 +1,4 @@
-import SlicedArray, {Slice} from '../helpers/slicedArray';
+import SlicedArray, {Slice, SliceEnd} from '../helpers/slicedArray';
 
 test('Slicing returns new Slice', () => {
   const sliced = new SlicedArray();
@@ -76,6 +76,16 @@ describe('Inserting', () => {
     expect(slices.length).toEqual(1);
   });
 
+  test('Insert slice to a single-value slice', () => {
+    const sliced = new SlicedArray<number>();
+    // @ts-ignore
+    const slices = sliced.slices;
+    sliced.insertSlice([3, 2]);
+    sliced.delete(3);
+    sliced.insertSlice([4, 2]);
+    expect([...slices[0]]).toEqual([4, 2]);
+  });
+
   test('Return inserted & flattened slice', () => {
     expect(slices[0]).toEqual(returnedSlice);
   });
@@ -94,7 +104,8 @@ describe('Slicing', () => {
     values[i] = i + INCREMENTOR * i;
   }
   values.sort((a, b) => b - a);
-  sliced.insertSlice(values);
+  const slice = sliced.insertSlice(values);
+  slice.setEnd(SliceEnd.Bottom);
 
   const addOffset = 40;
   const limit = 40;
@@ -120,6 +131,101 @@ describe('Slicing', () => {
         const {slice} = sliced.sliceMe(value, addOffset, limit);
         expect([...slice]).toEqual(values.slice(idx + addOffset, idx + addOffset + limit));
       });
+    });
+  });
+
+  test('Add bottom end slice and slice from it', () => {
+    const value = (VALUES_LENGTH + 1) * INCREMENTOR;
+    const slice = sliced.insertSlice([value]);
+    slice.setEnd(SliceEnd.Bottom);
+
+    const result = sliced.sliceMe(value, 0, limit);
+
+    expect([...result.slice]).toEqual([]);
+  });
+});
+
+describe('offsetIdOffset', () => {
+  const sliced = new SlicedArray<number>();
+  const values = [5, 4, 3, 2, 1];
+  const slice = sliced.insertSlice(values);
+  slice.setEnd(SliceEnd.Both);
+
+  describe('No addOffset', () => {
+    test('Hit', () => {
+      const result = sliced.sliceMe(slice[1], 0, 2);
+      expect(result.offsetIdOffset).toEqual(2);
+      expect([...result.slice]).toEqual(values.slice(2, 2 + 2));
+    });
+
+    test('Hit start', () => {
+      const result = sliced.sliceMe(slice[0], 0, 2);
+      expect(result.offsetIdOffset).toEqual(1);
+      expect([...result.slice]).toEqual(values.slice(1, 1 + 2));
+    });
+
+    test('Hit end', () => {
+      const result = sliced.sliceMe(slice[sliced.length - 1], 0, 2);
+      expect(result.offsetIdOffset).toEqual(slice.length);
+      expect([...result.slice]).toEqual(values.slice(slice.length, slice.length + 2));
+    });
+
+    test('No hit', () => {
+      const result = sliced.sliceMe(slice[1] + 0.1, 0, 2);
+      expect(result.offsetIdOffset).toEqual(1);
+      expect([...result.slice]).toEqual(values.slice(1, 1 + 2));
+    });
+
+    test('No hit start', () => {
+      const result = sliced.sliceMe(slice[0] + 0.1, 0, 2);
+      expect(result.offsetIdOffset).toEqual(0);
+      expect([...result.slice]).toEqual(values.slice(0, 0 + 2));
+    });
+
+    test('No hit end', () => {
+      const result = sliced.sliceMe(slice[sliced.length - 1] - 0.1, 0, 2);
+      expect(result.offsetIdOffset).toEqual(slice.length);
+      expect([...result.slice]).toEqual(values.slice(slice.length, slice.length + 2));
+    });
+  });
+
+  describe('Positive addOffset', () => {
+    test('Hit', () => {
+      const result = sliced.sliceMe(slice[1], 1, 2);
+      expect(result.offsetIdOffset).toEqual(2);
+      expect([...result.slice]).toEqual(values.slice(3, 3 + 2));
+    });
+
+    test('No hit', () => {
+      const result = sliced.sliceMe(slice[1] + 0.1, 1, 2);
+      expect(result.offsetIdOffset).toEqual(1);
+      expect([...result.slice]).toEqual(values.slice(2, 2 + 2));
+    });
+  });
+
+  describe('Negative addOffset', () => {
+    test('Hit', () => {
+      const result = sliced.sliceMe(slice[1], -1, 2);
+      expect(result.offsetIdOffset).toEqual(2);
+      expect([...result.slice]).toEqual(values.slice(1, 1 + 2));
+    });
+
+    test('Hit start', () => {
+      const result = sliced.sliceMe(slice[0], -1, 2);
+      expect(result.offsetIdOffset).toEqual(1);
+      expect([...result.slice]).toEqual(values.slice(0, 0 + 2));
+    });
+
+    test('No hit', () => {
+      const result = sliced.sliceMe(slice[1] + 0.1, -1, 2);
+      expect(result.offsetIdOffset).toEqual(1);
+      expect([...result.slice]).toEqual(values.slice(0, 0 + 2));
+    });
+
+    test('No hit start', () => {
+      const result = sliced.sliceMe(slice[0] + 0.1, -1, 2);
+      expect(result.offsetIdOffset).toEqual(0);
+      expect([...result.slice]).toEqual(values.slice(0, 0 + 1));
     });
   });
 });

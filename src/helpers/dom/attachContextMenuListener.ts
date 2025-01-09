@@ -7,7 +7,7 @@
 import IS_TOUCH_SUPPORTED from '../../environment/touchSupport';
 import {IS_APPLE} from '../../environment/userAgent';
 import contextMenuController from '../contextMenuController';
-import ListenerSetter from '../listenerSetter';
+import ListenerSetter, {ListenerOptions} from '../listenerSetter';
 import cancelEvent from './cancelEvent';
 
 let _cancelContextMenuOpening = false, _cancelContextMenuOpeningTimeout = 0;
@@ -24,14 +24,28 @@ export function cancelContextMenuOpening() {
   _cancelContextMenuOpening = true;
 }
 
-export function attachContextMenuListener(element: HTMLElement, callback: (e: Touch | MouseEvent) => void, listenerSetter?: ListenerSetter) {
+export function attachContextMenuListener({
+  element,
+  callback,
+  listenerSetter,
+  listenerOptions
+}: {
+  element: HTMLElement,
+  callback: (e: TouchEvent | MouseEvent) => void,
+  listenerSetter?: ListenerSetter,
+  listenerOptions?: ListenerOptions
+}) {
   const add = listenerSetter ? listenerSetter.add(element) : element.addEventListener.bind(element);
   const remove = listenerSetter ? listenerSetter.removeManual.bind(listenerSetter, element) : element.removeEventListener.bind(element);
 
-  if(IS_APPLE && IS_TOUCH_SUPPORTED) {
+  // can't cancel further events coming after 'contextmenu' event
+  if((IS_APPLE && IS_TOUCH_SUPPORTED) || listenerOptions) {
     let timeout: number;
 
-    const options: EventListenerOptions = {capture: true};
+    const options: EventListenerOptions = {
+      ...(listenerOptions || {}),
+      capture: true
+    };
 
     const onCancel = () => {
       clearTimeout(timeout);
@@ -59,14 +73,14 @@ export function attachContextMenuListener(element: HTMLElement, callback: (e: To
           return;
         }
 
-        callback(e.touches[0]);
+        callback(e);
         onCancel();
 
         if(contextMenuController.isOpened()) {
-          element.addEventListener('touchend', cancelEvent, {once: true}); // * fix instant closing
+          add('touchend', cancelEvent, {once: true}); // * fix instant closing
         }
       }, .4e3);
-    });
+    }, listenerOptions);
 
     /* if(!isSafari) {
       add('contextmenu', (e: any) => {
@@ -78,8 +92,8 @@ export function attachContextMenuListener(element: HTMLElement, callback: (e: To
       callback(e);
 
       if(contextMenuController.isOpened()) {
-        element.addEventListener('touchend', cancelEvent, {once: true}); // * fix instant closing
+        add('touchend', cancelEvent, {once: true}); // * fix instant closing
       }
-    } : callback);
+    } : callback, listenerOptions);
   }
 }

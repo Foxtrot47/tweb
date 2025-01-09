@@ -25,25 +25,13 @@ const onFirstMount = () => {
 
   page.pageEl.style.display = '';
 
-  // AudioContext && global.navigator && global.navigator.mediaDevices && global.navigator.mediaDevices.getUserMedia && global.WebAssembly;
-
-  /* // @ts-ignore
-  var AudioContext = globalThis.AudioContext || globalThis.webkitAudioContext;
-  alert('AudioContext:' + typeof(AudioContext));
-  // @ts-ignore
-  alert('global.navigator:' + typeof(navigator));
-  alert('navigator.mediaDevices:' + typeof(navigator.mediaDevices));
-  alert('navigator.mediaDevices.getUserMedia:' + typeof(navigator.mediaDevices?.getUserMedia));
-  alert('global.WebAssembly:' + typeof(WebAssembly)); */
-
-  // (Array.from(document.getElementsByClassName('rp')) as HTMLElement[]).forEach((el) => ripple(el));
-
   blurActiveElement();
 
   return Promise.all([
+    import('../lib/appManagers/appDialogsManager'),
     loadFonts()/* .then(() => new Promise((resolve) => window.requestAnimationFrame(resolve))) */,
-    import('../lib/appManagers/appDialogsManager')
-  ]).then(([_, appDialogsManager]) => {
+    'requestVideoFrameCallback' in HTMLVideoElement.prototype ? Promise.resolve() : import('../helpers/dom/requestVideoFrameCallbackPolyfill')
+  ]).then(([appDialogsManager]) => {
     appDialogsManager.default.start();
     setTimeout(() => {
       document.getElementById('auth-pages').remove();

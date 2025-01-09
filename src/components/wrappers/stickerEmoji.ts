@@ -4,17 +4,20 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {AppManagers} from '../../lib/appManagers/managers';
 import rootScope from '../../lib/rootScope';
 import wrapSticker from './sticker'
+import {Modify} from '../../types';
 
-export default async function wrapStickerEmoji({emoji, div, width, height, managers = rootScope.managers}: {
-  emoji: string,
+export default async function wrapStickerEmoji(options: Modify<Parameters<typeof wrapSticker>[0], {
   div: HTMLElement,
-  managers?: AppManagers,
-  width: number,
-  height: number
-}) {
+  doc?: never,
+  loop?: never
+}>) {
+  const {
+    emoji,
+    div,
+    managers = rootScope.managers
+  } = options;
   const doc = await managers.appStickersManager.getAnimatedEmojiSticker(emoji);
   if(!doc) {
     div.classList.add('media-sticker-wrapper');
@@ -23,11 +26,8 @@ export default async function wrapStickerEmoji({emoji, div, width, height, manag
 
   return wrapSticker({
     doc,
-    div,
-    emoji,
-    width,
-    height,
+    play: true,
     loop: false,
-    play: true
+    ...options
   });
 }

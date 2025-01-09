@@ -88,7 +88,13 @@ export type Mutable<T> = {
   -readonly [K in keyof T]: T[K];
 };
 
-export type AuthState = AuthState.signIn | AuthState.signQr | AuthState.authCode | AuthState.password | AuthState.signUp | AuthState.signedIn;
+export type MaybePromise<T> = T | Promise<T>;
+
+export type PickByType<T, Value> = {
+  [P in keyof T as T[P] extends Value | undefined ? P : never]: T[P]
+};
+
+export type AuthState = AuthState.signIn | AuthState.signQr | AuthState.authCode | AuthState.password | AuthState.signUp | AuthState.signedIn | AuthState.signImport;
 export namespace AuthState {
   export type signIn = {
     _: 'authStateSignIn'
@@ -118,6 +124,17 @@ export namespace AuthState {
   export type signedIn = {
     _: 'authStateSignedIn'
   };
+
+  export type signImport = {
+    _: 'authStateSignImport',
+    data: {
+      token: string,
+      userId: UserId,
+      dcId: DcId,
+      isTest: boolean,
+      tgAddr: string
+    }
+  };
 }
 
 export type SendMessageEmojiInteractionData = {
@@ -125,27 +142,180 @@ export type SendMessageEmojiInteractionData = {
   v: 1
 };
 
+export type TelegramWebViewTheme = {
+  bg_color: string,
+  secondary_bg_color: string,         // 143
+  text_color: string,
+  hint_color: string,
+  link_color: string,
+  button_color: string,
+  button_text_color: string,          // 166
+  header_bg_color: string,            // 166
+  accent_text_color: string,          // 166
+  section_bg_color: string            // 166
+  section_header_text_color: string,  // 166
+  subtitle_text_color: string,        // 166
+  destructive_text_color: string      // 166
+};
+
 /**
  * @link https://core.telegram.org/api/web-events#postmessage-api
  */
-export type TelegramWebviewEventMap = {
+export type TelegramWebViewEventMap = {
+  iframe_ready: {
+    reload_supported?: boolean
+  },
+  iframe_will_reload: void,
   payment_form_submit: {
     credentials: any,
     title: string
   },
   web_app_open_tg_link: {
     path_full: string // '/username'
+  },
+  web_app_close: void,
+  web_app_open_popup: {
+    title?: string,
+    message: string,
+    buttons: {
+      type: 'ok' | 'close' | 'cancel' | 'default' | 'destructive',
+      text: string,
+      id: string
+    }[]
+  },
+  web_app_setup_closing_behavior: {
+    need_confirmation: boolean
+  },
+  web_app_open_scan_qr_popup: {
+    text?: string
+  },
+  web_app_set_background_color: {
+    color: string
+  },
+  web_app_read_text_from_clipboard: {
+    req_id: string
+  },
+  web_app_set_header_color: {
+    color_key?: 'bg_color' | 'secondary_bg_color',
+    color?: string // 163, #RRGGBB
+  },
+  web_app_data_send: {
+    data: string
+  },
+  web_app_switch_inline_query: {
+    chat_types?: TelegramChoosePeerType[],
+    query: string
+  },
+  web_app_trigger_haptic_feedback: {
+    type: 'impact',
+    impact_style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft'
+  } | {
+    type: 'notification',
+    notification_type: 'error' | 'success' | 'warning'
+  } | {
+    type: 'selection_change'
+  },
+  web_app_open_link: {
+    url: string
+  },
+  web_app_open_invoice: {
+    slug: string
+  },
+  web_app_expand: void,
+  web_app_request_viewport: void,
+  web_app_request_theme: void,
+  web_app_ready: void,
+  web_app_setup_main_button: {
+    is_visible: boolean,
+    is_active: boolean,
+    text: string,
+    color: string,
+    text_color: string,
+    is_progress_visible: boolean
+  },
+  web_app_setup_back_button: {
+    is_visible: boolean
+  },
+  web_app_setup_settings_button: {
+    is_visible: boolean
+  },  // 166
+  web_app_request_write_access: void, // 162
+  web_app_request_phone: void,        // 162
+  web_app_invoke_custom_method: {     // 162
+    req_id: string,
+    method: string,
+    params: any
+  },
+  share_score: void,
+  share_game: void,
+  game_over: void,
+  game_loaded: void,
+  resize_frame: {
+    height: number
   }
 };
 
-export type TelegramWebviewSerializedEvent<T extends keyof TelegramWebviewEventMap> = {
+export type TelegramWebViewSerializedEvent<T extends keyof TelegramWebViewEventMap> = {
   eventType: T,
-  eventData: TelegramWebviewEventMap[T]
+  eventData: TelegramWebViewEventMap[T]
 };
 
-export type TelegramWebviewSerializedEvents = {
-  [type in keyof TelegramWebviewEventMap]: TelegramWebviewSerializedEvent<type>
+export type TelegramWebViewSerializedEvents = {
+  [type in keyof TelegramWebViewEventMap]: TelegramWebViewSerializedEvent<type>
 };
 
-export type TelegramWebviewEvent = TelegramWebviewSerializedEvents[keyof TelegramWebviewEventMap];
-export type TelegramWebviewEventCallback = (event: TelegramWebviewEvent) => void;
+export type TelegramWebViewEvent = TelegramWebViewSerializedEvents[keyof TelegramWebViewEventMap];
+export type TelegramWebViewEventCallback = (event: TelegramWebViewEvent) => void;
+
+export type TelegramWebViewSendEventMap = {
+  // https://core.telegram.org/api/bots/webapps
+  main_button_pressed: void,
+  settings_button_pressed: void,
+  back_button_pressed: void,
+  invoice_closed: {
+    slug: string,
+    status: 'cancelled' | 'failed' | 'pending' | 'paid'
+  },
+  viewport_changed: {
+    height: number,
+    is_state_stable: boolean,
+    is_expanded: boolean
+  },
+  theme_changed: {
+    theme_params: TelegramWebViewTheme
+  },
+  popup_closed: {
+    button_id?: string
+  },
+  scan_qr_popup_closed: {
+    data?: string
+  },
+  clipboard_text_received: {
+    req_id: string,
+    data?: string
+  },
+  write_access_requested: { // 162
+    status: 'allowed' | 'cancelled'
+  },
+  phone_requested: {        // 162
+    status: 'sent' | 'cancelled'
+  },
+  custom_method_invoked: {  // 162
+    req_id: string,
+    result: any,
+    error?: string
+  },
+  reload_iframe: void,      // 166
+};
+
+// export type TelegramWebViewSendSerializedEvent<T extends keyof TelegramWebViewSendEventMap> = {
+//   eventType: T,
+//   eventData: TelegramWebViewSendEventMap[T]
+// };
+
+// export type TelegramWebViewSendSerializedEvents = {
+//   [type in keyof TelegramWebViewSendEventMap]: TelegramWebViewSendSerializedEvent<type>
+// };
+
+// export type TelegramWebViewSendEvent = TelegramWebViewSerializedEvents[keyof TelegramWebViewSendEventMap];
+// export type TelegramWebViewSendEventCallback = (event: TelegramWebViewSendEvent) => void;

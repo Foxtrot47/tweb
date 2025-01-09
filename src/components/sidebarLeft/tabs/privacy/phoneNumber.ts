@@ -11,8 +11,7 @@ import anchorCopy from '../../../../helpers/dom/anchorCopy';
 import PrivacyType from '../../../../lib/appManagers/utils/privacy/privacyType';
 
 export default class AppPrivacyPhoneNumberTab extends SliderSuperTabEventable {
-  protected async init() {
-    this.header.classList.add('with-border');
+  public async init() {
     this.container.classList.add('privacy-tab', 'privacy-phone-number');
     this.setTitle('PrivacyPhone');
 

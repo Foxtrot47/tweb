@@ -9,16 +9,11 @@
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-// #if MTPROTO_AUTO
 import transportController from './transports/controller';
-// #endif
-
 import {TLSerialization, TLDeserialization} from './tl_utils';
 import {TransportType} from './dcConfigurator';
 import rsaKeysManager from './rsaKeysManager';
-
 import CryptoWorker from '../crypto/cryptoMessagePort';
-
 import {logger, LogTypes} from '../logger';
 import DEBUG from '../../config/debug';
 import {Awaited, DcId} from '../../types';
@@ -31,6 +26,7 @@ import {bigIntFromBytes} from '../../helpers/bigInt/bigIntConversion';
 import bigInt from 'big-integer';
 import randomize from '../../helpers/array/randomize';
 import {AppManager} from '../appManagers/manager';
+import Modes from '../../config/modes';
 
 /* let fNewNonce: any = bytesFromHex('8761970c24cb2329b5b2459752c502f3057cb7e8dbab200e526e8767fdc73b3c').reverse();
 let fNonce: any = bytesFromHex('b597720d11faa5914ef485c529cde414').reverse();
@@ -114,9 +110,7 @@ export class Authorizer extends AppManager {
 
   private transportType: TransportType;
 
-  // #if MTPROTO_AUTO
   private getTransportTypePromise: Promise<void>;
-  // #endif
 
   protected after() {
     this.cached = {};
@@ -584,15 +578,17 @@ export class Authorizer extends AppManager {
     }
   }
 
-  // #if MTPROTO_AUTO
-  private getTransportType() {
+  private getTransportType = () => {
+    if(!import.meta.env.VITE_MTPROTO_AUTO || !Modes.multipleTransports) {
+      return;
+    }
+
     if(this.getTransportTypePromise) return this.getTransportTypePromise;
     return this.getTransportTypePromise = transportController.pingTransports().then(({websocket}) => {
       this.transportType = websocket ? 'websocket' : 'https';
       this.log('will use transport:', this.transportType);
     });
-  }
-  // #endif
+  };
 
   public auth(dcId: DcId) {
     let promise = this.cached[dcId];
@@ -601,9 +597,7 @@ export class Authorizer extends AppManager {
     }
 
     promise = new Promise(async(resolve, reject) => {
-      // #if MTPROTO_AUTO
       await this.getTransportType();
-      // #endif
 
       let error: ApiError;
       let _try = 1;

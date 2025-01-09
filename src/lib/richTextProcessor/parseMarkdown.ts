@@ -15,7 +15,7 @@ import combineSameEntities from './combineSameEntities';
 import findConflictingEntity from './findConflictingEntity';
 import mergeEntities from './mergeEntities';
 
-export default function parseMarkdown(raw: string, currentEntities: MessageEntity[], noTrim?: boolean): string {
+export default function parseMarkdown(raw: string, currentEntities: MessageEntity[] = [], noTrim?: boolean) {
   /* if(!markdownTestRegExp.test(text)) {
     return noTrim ? text : text.trim();
   } */
@@ -28,31 +28,55 @@ export default function parseMarkdown(raw: string, currentEntities: MessageEntit
   let rawOffset = 0, match;
   while(match = raw.match(MARKDOWN_REG_EXP)) {
     const matchIndex = rawOffset + match.index;
-    newTextParts.push(raw.substr(0, match.index));
-    const text = (match[3] || match[8] || match[11] || match[13]);
-    rawOffset -= text.length;
+    const possibleNextRawOffset = match.index + match[0].length;
+    const beforeMatch = match.index > 0 && raw.slice(0, match.index);
+    beforeMatch && newTextParts.push(beforeMatch);
+    const text = match[3] || match[8] || match[11] || match[13];
+    // rawOffset -= text.length;
     // text = text.replace(/^\s+|\s+$/g, '');
-    rawOffset += text.length;
+    // rawOffset += text.length;
 
     let entity: MessageEntity;
     pushedEntity = false;
     if(text.match(/^`*$/)) {
       newTextParts.push(match[0]);
     } else if(match[3]) { // pre
+      let languageMatch = match[3].match(/(.*?)\n/);
+      if(!languageMatch?.[1]) {
+        languageMatch = undefined;
+      }
+
+      let code = languageMatch ? match[3].slice(languageMatch[1].length) : match[3];
+      const startIndex = code[0] === '\n' ? 1 : 0;
+      const endIndex = code[code.length - 1] === '\n' ? -1 : undefined;
+      code = code.slice(startIndex, endIndex);
       entity = {
         _: 'messageEntityPre',
-        language: '',
+        language: languageMatch?.[1] || '',
         offset: matchIndex + match[1].length,
-        length: text.length
+        length: code.length
       };
 
       if(pushEntity(entity)) {
-        if(match[5] === '\n') {
-          match[5] = '';
+        if(endIndex) {
           rawOffset -= 1;
         }
 
-        newTextParts.push(match[1] + text + match[5]);
+        if(languageMatch) {
+          rawOffset -= languageMatch[0].length;
+        }
+
+        let whitespace = '';
+        if(match[1]) {
+          whitespace = match[1];
+        } else {
+          const previousPart = newTextParts[newTextParts.length - 1];
+          if(previousPart && !/\s/.test(previousPart[previousPart.length - 1])) {
+            whitespace = '\n';
+          }
+        }
+
+        newTextParts.push(whitespace, code, match[5]);
 
         rawOffset -= match[2].length + match[4].length;
       }
@@ -109,9 +133,18 @@ export default function parseMarkdown(raw: string, currentEntities: MessageEntit
 
     raw = raw.substr(match.index + match[0].length);
     rawOffset += match.index + match[0].length;
+
+    const rawOffsetDiff = rawOffset - possibleNextRawOffset;
+    if(rawOffsetDiff) {
+      currentEntities.forEach((entity) => {
+        if(entity.offset >= matchIndex) {
+          entity.offset += rawOffsetDiff;
+        }
+      });
+    }
   }
 
-  newTextParts.push(raw);
+  raw && newTextParts.push(raw);
   let newText = newTextParts.join('');
   if(!newText.replace(/\s+/g, '').length) {
     newText = raw;
@@ -123,7 +156,7 @@ export default function parseMarkdown(raw: string, currentEntities: MessageEntit
   //   newText = newText.trim();
   // }
 
-  mergeEntities(currentEntities, entities);
+  currentEntities = mergeEntities(currentEntities, entities);
   combineSameEntities(currentEntities);
 
   let length = newText.length;
@@ -151,5 +184,5 @@ export default function parseMarkdown(raw: string, currentEntities: MessageEntit
     }
   }
 
-  return newText;
+  return [newText, currentEntities] as const;
 }

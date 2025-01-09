@@ -18,6 +18,9 @@ import safeAssign from '../helpers/object/safeAssign';
 import capitalizeFirstLetter from '../helpers/string/capitalizeFirstLetter';
 import matchUrlProtocol from './richTextProcessor/matchUrlProtocol';
 import wrapUrl from './richTextProcessor/wrapUrl';
+import {setDirection} from '../helpers/dom/setInnerHTML';
+import setBlankToAnchor from './richTextProcessor/setBlankToAnchor';
+import {createSignal} from 'solid-js';
 
 export const langPack: {[actionType: string]: LangPackKey} = {
   'messageActionChatCreate': 'ActionCreateGroup',
@@ -45,6 +48,7 @@ export const langPack: {[actionType: string]: LangPackKey} = {
   'messageActionChannelDeletePhoto': 'Chat.Service.Channel.RemovedPhoto',
   'messageActionHistoryClear': 'HistoryCleared',
   'messageActionDiscussionStarted': 'DiscussionStarted',
+  'messageActionChannelJoined': 'ChannelJoined',
 
   'messageActionChannelMigrateFrom': 'ActionMigrateFromGroup',
 
@@ -85,10 +89,18 @@ namespace I18n {
   export let lastAppliedLangCode: string;
   export let requestedServerLanguage = false;
   export let timeFormat: State['settings']['timeFormat'];
+  export let isRTL = false;
+
+  export const [langCodeNormalized, setLangCodeNormalized] = createSignal<TranslatableLanguageISO>();
+
+  export function setRTL(rtl: boolean) {
+    isRTL = rtl;
+  }
 
   function setLangCode(langCode: string) {
     lastRequestedLangCode = langCode;
     lastRequestedNormalizedLangCode = langCode.split('-')[0];
+    setLangCodeNormalized(lastRequestedNormalizedLangCode.split('-')[0] as any);
   }
 
   export function getCacheLangPack(): Promise<LangPackDifference> {
@@ -123,10 +135,10 @@ namespace I18n {
         const date = new Date();
         date.setHours(0);
         const amText = dateTimeFormat.format(date);
-        amPmCache.am = amText.split(' ')[1];
+        amPmCache.am = amText.split(/\s/)[1];
         date.setHours(12);
         const pmText = dateTimeFormat.format(date);
-        amPmCache.pm = pmText.split(' ')[1];
+        amPmCache.pm = pmText.split(/\s/)[1];
       } catch(err) {
         console.error('cannot get am/pm', err);
         amPmCache = {am: 'AM', pm: 'PM'};
@@ -181,6 +193,7 @@ namespace I18n {
   }
 
   export function loadLangPack(langCode: string, web?: boolean) {
+    web = true;
     requestedServerLanguage = true;
     const managers = rootScope.managers;
     return Promise.all([
@@ -311,10 +324,16 @@ namespace I18n {
     }
 
     if(lastAppliedLangCode !== currentLangCode) {
-      rootScope.dispatchEvent('language_change', currentLangCode);
+      if(lastAppliedLangCode && rootScope.myId) {
+        rootScope.managers.appReactionsManager.resetAvailableReactions();
+        rootScope.managers.appUsersManager.indexMyself();
+        rootScope.managers.dialogsStorage.indexMyDialog();
+      }
+
       lastAppliedLangCode = currentLangCode;
       cachedDateTimeFormats.clear();
       updateAmPm();
+      rootScope.dispatchEvent('language_change', currentLangCode);
     }
 
     const elements = Array.from(document.querySelectorAll(`.i18n`)) as HTMLElement[];
@@ -327,8 +346,8 @@ namespace I18n {
     });
   }
 
-  function pushNextArgument(out: ReturnType<typeof superFormatter>, args: FormatterArguments, indexHolder: {i: number}) {
-    const arg = args[indexHolder.i++];
+  function pushNextArgument(out: ReturnType<typeof superFormatter>, args: FormatterArguments, indexHolder: {i: number}, i?: number) {
+    const arg = args[i === undefined ? indexHolder.i++ : i];
     if(Array.isArray(arg)) {
       out.push(...arg as any);
     } else {
@@ -336,15 +355,25 @@ namespace I18n {
     }
   }
 
-  export function superFormatter(input: string, args?: FormatterArguments, indexHolder = {i: 0}): Exclude<FormatterArgument, FormatterArgument[]>[] {
+  export function superFormatter(input: string, args?: FormatterArguments, indexHolder?: {i: number}): Exclude<FormatterArgument, FormatterArgument[]>[] {
+    if(!indexHolder) { // set starting index for arguments without order
+      indexHolder = {i: 0};
+      const indexes = input.match(/(%|un)\d+/g);
+      if(indexes?.length) {
+        indexHolder.i = Math.max(...indexes.map((str) => +str.replace(/\D/g, '')));
+      }
+    }
+
     const out: ReturnType<typeof superFormatter> = [];
-    const regExp = /(\*\*|__)(.+?)\1|(\n)|(\[.+?\]\(.*?\))|un\d|%\d\$.|%./g;
+    const regExp = /(\*\*|__)(.+?)\1|(\n)|(\[.+?\]\(.*?\))|un\d|%\d\$.|%\S/g;
 
     let lastIndex = 0;
     input.replace(regExp, (match, p1: any, p2: any, p3: any, p4: string, offset: number, string: string) => {
       // console.table({match, p1, p2, offset, string});
 
-      out.push(string.slice(lastIndex, offset));
+      if(offset > lastIndex) {
+        out.push(string.slice(lastIndex, offset));
+      }
 
       if(p1) {
         // offset += p1.length;
@@ -375,8 +404,8 @@ namespace I18n {
           a = document.createElement('a');
           const wrappedUrl = wrapUrl(url);
           a.href = wrappedUrl.url;
-          if(wrappedUrl.onclick) a.setAttribute('onclick', wrappedUrl.onclick);
-          a.target = '_blank';
+          if(wrappedUrl.onclick) a.setAttribute('onclick', wrappedUrl.onclick + '(this)');
+          setBlankToAnchor(a);
         } else {
           a = args[indexHolder.i++] as HTMLAnchorElement;
 
@@ -384,14 +413,26 @@ namespace I18n {
             a = a.firstChild as any;
           }
 
-          a.textContent = ''; // reset content
+          if(typeof(a) !== 'string') {
+            a.textContent = ''; // reset content
+          }
         }
 
-        a.append(...superFormatter(text, args, indexHolder) as any);
-
-        out.push(a);
+        const formatted = superFormatter(text, args, indexHolder) as any;
+        if(typeof(a) === 'string') {
+          out.push(...formatted);
+        } else {
+          a.append(...formatted);
+          out.push(a);
+        }
       } else if(args) {
-        pushNextArgument(out, args, indexHolder);
+        const index = match.replace(/\D/g, '');
+        pushNextArgument(
+          out,
+          args,
+          indexHolder,
+          !index || Number.isNaN(+index) ? undefined : Math.min(args.length - 1, +index - 1)
+        );
       }
 
       lastIndex = offset + match.length;
@@ -466,9 +507,6 @@ namespace I18n {
       this.element.classList.add('i18n');
 
       this.property = options?.property;
-      if(options && ((options as any as IntlElementOptions).key || (options as any as IntlDateElementOptions).date)) {
-        this.update(options);
-      }
 
       weakMap.set(this.element, this);
     }
@@ -486,14 +524,20 @@ namespace I18n {
 
     constructor(options: IntlElementOptions = {}) {
       super({...options, property: options.property ?? 'innerHTML'});
+
+      if(options?.key) {
+        this.update(options);
+      }
     }
 
     public update(options?: IntlElementOptions) {
       safeAssign(this, options);
 
       if(this.property === 'innerHTML') {
-        this.element.textContent = '';
-        this.element.append(...format(this.key, false, this.args) as any);
+        this.element.replaceChildren(...format(this.key, false, this.args) as any);
+        if(this.args?.length) {
+          this.element.normalize();
+        }
       } else {
         // @ts-ignore
         const v = this.element[this.property];
@@ -515,7 +559,7 @@ namespace I18n {
   }
 
   const cachedDateTimeFormats: Map<string, Intl.DateTimeFormat> = new Map();
-  function getDateTimeFormat(options: Intl.DateTimeFormatOptions = {}) {
+  export function getDateTimeFormat(options: Intl.DateTimeFormatOptions = {}) {
     const json = JSON.stringify(options);
     let dateTimeFormat = cachedDateTimeFormats.get(json);
     if(!dateTimeFormat) {
@@ -537,6 +581,11 @@ namespace I18n {
 
     constructor(options: IntlDateElementOptions) {
       super({...options, property: options.property ?? 'textContent'});
+      setDirection(this.element);
+
+      if(options?.date) {
+        this.update(options);
+      }
     }
 
     public update(options?: IntlDateElementOptions) {
@@ -588,11 +637,14 @@ export {i18n_};
 const _i18n = I18n._i18n;
 export {_i18n};
 
-export function joinElementsWith(elements: (Node | string)[], joiner: typeof elements[0] | ((isLast: boolean) => typeof elements[0])) {
-  const arr = elements.slice(0, 1);
+export function joinElementsWith<T extends Node | string | Array<Node | string>>(
+  elements: T[],
+  joiner: T | string | ((isLast: boolean) => T)
+): T[] {
+  const arr = elements.slice(0, 1) as T[];
   for(let i = 1; i < elements.length; ++i) {
     const isLast = (elements.length - 1) === i;
-    arr.push(typeof(joiner) === 'function' ? joiner(isLast) : joiner);
+    arr.push(typeof(joiner) === 'function' ? (joiner as any)(isLast) : joiner);
     arr.push(elements[i]);
   }
 
@@ -612,4 +664,4 @@ export function join(elements: (Node | string)[], useLast = true, plain?: boolea
   return plain ? joined.join('') : joined;
 }
 
-MOUNT_CLASS_TO.I18n = I18n;
+MOUNT_CLASS_TO && (MOUNT_CLASS_TO.I18n = I18n);

@@ -4,18 +4,22 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
+import simulateEvent from '../helpers/dom/dispatchEvent';
 import getDeepProperty from '../helpers/object/getDeepProperty';
 import {LangPackKey, _i18n} from '../lib/langPack';
 import apiManagerProxy from '../lib/mtproto/mtprotoworker';
 import rootScope from '../lib/rootScope';
+import Icon from './icon';
 
 export default class RadioField {
   public input: HTMLInputElement;
   public label: HTMLLabelElement;
   public main: HTMLElement;
+  public lockIcon: HTMLElement;
 
   constructor(options: {
     text?: string,
+    textElement?: HTMLElement | DocumentFragment,
     langKey?: LangPackKey,
     name: string,
     value?: string,
@@ -50,8 +54,10 @@ export default class RadioField {
     const main = this.main = document.createElement('div');
     main.classList.add('radio-field-main');
 
-    if(options.text) {
-      main.innerHTML = options.text;
+    if(options.textElement) {
+      main.append(options.textElement);
+    } else if(options.text) {
+      main.textContent = options.text;
       /* const caption = document.createElement('div');
       caption.classList.add('radio-field-main-caption');
       caption.innerHTML = text;
@@ -75,12 +81,30 @@ export default class RadioField {
 
   set checked(checked: boolean) {
     this.setValueSilently(checked);
+    simulateEvent(this.input, 'change');
+  }
 
-    const event = new Event('change', {bubbles: true, cancelable: true});
-    this.input.dispatchEvent(event);
+  get locked() {
+    return !!this.lockIcon;
+  }
+
+  set locked(locked: boolean) {
+    if(!locked) {
+      this.lockIcon?.remove();
+      this.lockIcon = undefined;
+      this.main.classList.remove('is-locked');
+      return;
+    }
+
+    if(this.lockIcon) {
+      return;
+    }
+
+    this.main.prepend(this.lockIcon = Icon('premium_lock', 'radio-field-lock'));
+    this.main.classList.add('is-locked');
   }
 
   public setValueSilently(checked: boolean) {
     this.input.checked = checked;
   }
-};
+}

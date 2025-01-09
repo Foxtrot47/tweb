@@ -4,7 +4,7 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import type {AppMessagesManager, MessagesStorageKey} from '../../lib/appManagers/appMessagesManager';
+import type {MessagesStorageKey} from '../../lib/appManagers/appMessagesManager';
 import type ChatBubbles from './bubbles';
 import type ChatInput from './input';
 import type Chat from './chat';
@@ -14,19 +14,17 @@ import ButtonIcon from '../buttonIcon';
 import CheckboxField from '../checkboxField';
 import PopupDeleteMessages from '../popups/deleteMessages';
 import PopupForward from '../popups/forward';
-import {toast} from '../toast';
 import SetTransition from '../singleTransition';
 import ListenerSetter from '../../helpers/listenerSetter';
 import PopupSendNow from '../popups/sendNow';
 import appNavigationController, {NavigationItem} from '../appNavigationController';
 import {IS_MOBILE_SAFARI} from '../../environment/userAgent';
-import I18n, {i18n, _i18n} from '../../lib/langPack';
+import {i18n, _i18n} from '../../lib/langPack';
 import findUpClassName from '../../helpers/dom/findUpClassName';
 import blurActiveElement from '../../helpers/dom/blurActiveElement';
 import cancelEvent from '../../helpers/dom/cancelEvent';
 import cancelSelection from '../../helpers/dom/cancelSelection';
 import getSelectedText from '../../helpers/dom/getSelectedText';
-import rootScope from '../../lib/rootScope';
 import replaceContent from '../../helpers/dom/replaceContent';
 import AppSearchSuper from '../appSearchSuper.';
 import isInDOM from '../../helpers/dom/isInDOM';
@@ -37,8 +35,15 @@ import EventListenerBase from '../../helpers/eventListenerBase';
 import safeAssign from '../../helpers/object/safeAssign';
 import {AppManagers} from '../../lib/appManagers/managers';
 import {attachContextMenuListener} from '../../helpers/dom/attachContextMenuListener';
-import filterUnique from '../../helpers/array/filterUnique';
 import appImManager from '../../lib/appManagers/appImManager';
+import {Message} from '../../layer';
+import PopupElement from '../popups';
+import flatten from '../../helpers/array/flatten';
+import IS_STANDALONE from '../../environment/standalone';
+import {toastNew} from '../toast';
+import confirmationPopup from '../confirmationPopup';
+import {makeFullMid} from './bubbles';
+import {ChatType} from './chat';
 
 const accumulateMapSet = (map: Map<any, Set<number>>) => {
   return [...map.values()].reduce((acc, v) => acc + v.size, 0);
@@ -55,11 +60,12 @@ class AppSelection extends EventListenerBase<{
   public selectedText: string;
 
   protected listenerSetter: ListenerSetter;
-  protected isScheduled: boolean;
+  public isScheduled: boolean;
+  public isStories: boolean;
   protected listenElement: HTMLElement;
 
-  protected onToggleSelection: (forwards: boolean, animate: boolean) => void;
-  protected onUpdateContainer: (cantForward: boolean, cantDelete: boolean, cantSend: boolean) => void;
+  protected onToggleSelection: (forwards: boolean, animate: boolean) => void | Promise<void>;
+  protected onUpdateContainer: (cantForward: boolean, cantDelete: boolean, cantSend: boolean, cantPin: boolean) => void;
   protected onCancelSelection: () => void;
   protected toggleByMid: (peerId: PeerId, mid: number) => void;
   protected toggleByElement: (bubble: HTMLElement) => void;
@@ -77,6 +83,8 @@ class AppSelection extends EventListenerBase<{
   protected doNotAnimate: boolean;
   protected managers: AppManagers;
 
+  protected onTouchLongPress: (e: Event) => void;
+
   constructor(options: {
     managers: AppManagers,
     getElementFromTarget: AppSelection['getElementFromTarget'],
@@ -86,7 +94,7 @@ class AppSelection extends EventListenerBase<{
     targetLookupClassName: string,
     lookupBetweenParentClassName: string,
     lookupBetweenElementsQuery: string,
-    isScheduled?: AppSelection['isScheduled']
+    onTouchLongPress?: AppSelection['onTouchLongPress']
   }) {
     super(false);
 
@@ -113,25 +121,35 @@ class AppSelection extends EventListenerBase<{
         this.selectedText = getSelectedText();
       });
 
-      attachContextMenuListener(listenElement, (e) => {
-        if(this.isSelecting || (this.verifyTouchLongPress && !this.verifyTouchLongPress())) return;
+      attachContextMenuListener({
+        element: listenElement,
+        callback: (e) => {
+          if(this.isSelecting || (this.verifyTouchLongPress && !this.verifyTouchLongPress())) return;
 
-        // * these two lines will fix instant text selection on iOS Safari
-        document.body.classList.add('no-select'); // * need no-select on body because chat-input transforms in channels
-        listenElement.addEventListener('touchend', (e) => {
-          cancelEvent(e); // ! this one will fix propagation to document loader button, etc
-          document.body.classList.remove('no-select');
+          this.onTouchLongPress?.(e);
 
-          // this.chat.bubbles.onBubblesClick(e);
-        }, {once: true, capture: true});
+          // * these two lines will fix instant text selection on iOS Safari
+          document.body.classList.add('no-select'); // * need no-select on body because chat-input transforms in channels
+          listenElement.addEventListener('touchend', (e) => {
+            cancelEvent(e); // ! this one will fix propagation to document loader button, etc
+            document.body.classList.remove('no-select');
 
-        cancelSelection();
-        // cancelEvent(e as any);
-        const element = this.getElementFromTarget(e.target as HTMLElement);
-        if(element) {
-          this.toggleByElement(element);
-        }
-      }, listenerSetter);
+            // this.chat.bubbles.onBubblesClick(e);
+          }, {once: true, capture: true});
+
+          if(IS_MOBILE_SAFARI && IS_STANDALONE) {
+            listenElement.addEventListener('mousedown', cancelEvent, {once: true, capture: true});
+          }
+
+          cancelSelection();
+          cancelEvent(e as any);
+          const element = this.getElementFromTarget(e.target as HTMLElement);
+          if(element) {
+            this.toggleByElement(element);
+          }
+        },
+        listenerSetter
+      });
 
       return;
     }
@@ -230,6 +248,9 @@ class AppSelection extends EventListenerBase<{
       if(!canceledSelection) {
         cancelSelection();
         canceledSelection = true;
+        document.body.classList.add('no-select');
+        // const chat = document.querySelector('.chat');
+        // chat.classList.add('no-select');
       }
       /* if(!good) {
         if(Math.abs(e.x - x) > MIN_CLICK_MOVE || Math.abs(e.y - y) > MIN_CLICK_MOVE) {
@@ -257,6 +278,8 @@ class AppSelection extends EventListenerBase<{
     };
 
     const onMouseUp = (e: MouseEvent) => {
+      document.body.classList.remove('no-select');
+
       if(seen.size) {
         attachClickEvent(window, cancelEvent, {capture: true, once: true, passive: false});
       }
@@ -334,7 +357,12 @@ class AppSelection extends EventListenerBase<{
       this.appendCheckbox(element, checkboxField);
     } else if(hasCheckbox) {
       this.getCheckboxInputFromElement(element).parentElement.remove();
-      SetTransition(element, 'is-selected', false, 200);
+      SetTransition({
+        element,
+        className: 'is-selected',
+        forwards: false,
+        duration: 200
+      });
     }
 
     return true;
@@ -350,10 +378,19 @@ class AppSelection extends EventListenerBase<{
     if(!size && !forceSelection) return;
 
     let cantForward = !size,
-      cantDelete = !size;
-    const cantSend = !size;
-    for(const [peerId, mids] of this.selectedMids) {
-      const storageKey: MessagesStorageKey = `${peerId}_${this.isScheduled ? 'scheduled' : 'history'}`;
+      cantDelete = !size,
+      cantSend = !size,
+      cantPin = !size;
+
+    if(this.isStories) {
+      cantForward = true;
+      cantSend = true;
+      const peerId = this.selectedMids.keys().next().value;
+      const r = await this.managers.appStoriesManager.cantPinDeleteStories(peerId, Array.from(this.selectedMids.get(peerId)));
+      cantPin = r.cantPin;
+      cantDelete = r.cantDelete;
+    } else for(const [peerId, mids] of this.selectedMids) {
+      const storageKey = this.getStorageKey(peerId);
       const r = await this.managers.appMessagesManager.cantForwardDeleteMids(storageKey, Array.from(mids));
       cantForward = r.cantForward;
       cantDelete = r.cantDelete;
@@ -361,7 +398,25 @@ class AppSelection extends EventListenerBase<{
       if(cantForward && cantDelete) break;
     }
 
-    this.onUpdateContainer && this.onUpdateContainer(cantForward, cantDelete, cantSend);
+    this.onUpdateContainer?.(cantForward, cantDelete, cantSend, cantPin);
+  }
+
+  private getStorageKey(peerId: PeerId): MessagesStorageKey {
+    return `${peerId}_${this.isScheduled ? 'scheduled' : 'history'}`;
+  }
+
+  public getSelectedMids() {
+    return flatten([...this.selectedMids.values()].map((set) => [...set])).sort((a, b) => a - b);
+  }
+
+  public getSelectedMessages() {
+    const selectedMessagesPromises: Promise<Message.message | Message.messageService>[] = [];
+    this.selectedMids.forEach((mids, peerId) => {
+      const storageKey = this.getStorageKey(peerId);
+      const p = Array.from(mids).map((mid) => this.managers.appMessagesManager.getMessageFromStorage(storageKey, mid));
+      selectedMessagesPromises.push(...p);
+    });
+    return Promise.all(selectedMessagesPromises);
   }
 
   public toggleSelection(toggleCheckboxes = true, forceSelection = false) {
@@ -404,7 +459,7 @@ class AppSelection extends EventListenerBase<{
     blurActiveElement();
 
     const forwards = !!size || forceSelection;
-    this.onToggleSelection && this.onToggleSelection(forwards, !this.doNotAnimate);
+    const toggleResult = this.onToggleSelection?.(forwards, !this.doNotAnimate);
 
     if(!IS_MOBILE_SAFARI) {
       if(forwards) {
@@ -420,15 +475,15 @@ class AppSelection extends EventListenerBase<{
     }
 
     if(forceSelection) {
-      this.updateContainer(forceSelection);
+      (toggleResult || Promise.resolve()).then(() => this.updateContainer(forceSelection));
     }
 
     return true;
   }
 
-  public cancelSelection = async(doNotAnimate?: boolean) => {
+  public cancelSelection = (doNotAnimate?: boolean) => {
     if(doNotAnimate) this.doNotAnimate = true;
-    this.onCancelSelection && await this.onCancelSelection();
+    this.onCancelSelection?.();
     this.selectedMids.clear();
     this.toggleSelection();
     cancelSelection();
@@ -449,12 +504,17 @@ class AppSelection extends EventListenerBase<{
 
     this.toggleSelection();
     this.updateContainer();
-    SetTransition(element, 'is-selected', isSelected, 200);
+    SetTransition({
+      element,
+      className: 'is-selected',
+      forwards: isSelected,
+      duration: 200
+    });
   }
 
   public isMidSelected(peerId: PeerId, mid: number) {
     const set = this.selectedMids.get(peerId);
-    return set?.has(mid);
+    return !!set?.has(mid);
   }
 
   public length() {
@@ -505,7 +565,7 @@ class AppSelection extends EventListenerBase<{
   /**
    * ! Call this method only to handle deleted messages
    */
-  public deleteSelectedMids(peerId: PeerId, mids: number[]) {
+  public deleteSelectedMids(peerId: PeerId, mids: number[], batch?: boolean) {
     const set = this.selectedMids.get(peerId);
     if(!set) {
       return;
@@ -519,8 +579,13 @@ class AppSelection extends EventListenerBase<{
       this.selectedMids.delete(peerId);
     }
 
-    this.updateContainer();
-    this.toggleSelection();
+    const after = () => {
+      this.updateContainer();
+      this.toggleSelection();
+    };
+
+    if(!batch) after();
+    return after;
   }
 }
 
@@ -530,10 +595,16 @@ export class SearchSelection extends AppSelection {
   public selectionForwardBtn: HTMLElement;
   public selectionDeleteBtn: HTMLElement;
   public selectionGotoBtn: HTMLElement;
+  public selectionPinBtn: HTMLElement;
 
+  public isStoriesArchive: boolean;
   private isPrivate: boolean;
 
-  constructor(private searchSuper: AppSearchSuper, managers: AppManagers, listenerSetter: ListenerSetter) {
+  constructor(
+    private searchSuper: AppSearchSuper,
+    managers: AppManagers,
+    listenerSetter: ListenerSetter
+  ) {
     super({
       managers,
       verifyTarget: (e, target) => !!target && this.isSelecting,
@@ -544,7 +615,7 @@ export class SearchSelection extends AppSelection {
     });
 
     this.isPrivate = !searchSuper.showSender;
-    this.attachListeners(searchSuper.container, listenerSetter);
+    !IS_TOUCH_SUPPORTED && this.attachListeners(searchSuper.container, listenerSetter);
   }
 
   /* public appendCheckbox(element: HTMLElement, checkboxField: CheckboxField) {
@@ -586,27 +657,80 @@ export class SearchSelection extends AppSelection {
     this.toggleByElement(element);
   };
 
-  protected onUpdateContainer = (cantForward: boolean, cantDelete: boolean, cantSend: boolean) => {
+  public onDeleteStoriesClick = async(ids?: number[]) => {
+    const peerId = [...this.selectedMids.keys()][0];
+    ids ||= [...this.selectedMids.get(peerId)];
+    await confirmationPopup({
+      titleLangKey: ids.length === 1 ? 'DeleteStoryTitle' : 'DeleteStoriesTitle',
+      descriptionLangKey: ids.length === 1 ? 'DeleteStorySubtitle' : 'DeleteStoriesSubtitle',
+      descriptionLangArgs: [ids.length],
+      button: {
+        langKey: 'Delete',
+        isDanger: true
+      }
+    });
+    this.cancelSelection();
+    this.managers.appStoriesManager.deleteStories(peerId, ids);
+  };
+
+  public onPinClick = (ids: number[], pin: boolean) => {
+    const peerId = [...this.selectedMids.keys()][0];
+    ids ||= [...this.selectedMids.get(peerId)];
+    const promise = this.managers.appStoriesManager.togglePinned(peerId, ids, pin);
+    this.cancelSelection();
+    promise.then(() => {
+      if(ids.length === 1) {
+        toastNew({langPackKey: pin ? 'StoryPinnedToProfile' : 'StoryArchivedFromProfile'});
+      } else {
+        toastNew({langPackKey: pin ? 'StorySavedTitle' : 'StoryArchived', langPackArguments: [ids.length]});
+      }
+    });
+  };
+
+  public onPinToTopClick = (ids: number[], pin: boolean) => {
+    const peerId = [...this.selectedMids.keys()][0] || this.searchSuper.searchContext.peerId;
+    const promise = this.managers.appStoriesManager.togglePinnedToTop(peerId, ids, pin);
+    this.cancelSelection();
+    promise.catch((err) => {
+      if((err as ApiError).type === 'STORY_ID_TOO_MANY') {
+        toastNew({langPackKey: 'StoriesPinLimit', langPackArguments: [(err as ApiError).limit]});
+      }
+    });
+  };
+
+  protected onUpdateContainer = (cantForward: boolean, cantDelete: boolean, cantSend: boolean, cantPin: boolean) => {
     const length = this.length();
-    replaceContent(this.selectionCountEl, i18n('messages', [length]));
-    this.selectionGotoBtn.classList.toggle('hide', length !== 1);
+    replaceContent(this.selectionCountEl, i18n(this.isStories ? 'StoriesCount' : 'messages', [length]));
+    this.selectionPinBtn.classList.toggle('hide', !this.isStories || cantPin);
+    this.selectionGotoBtn.classList.toggle('hide', this.isStories || length !== 1);
     this.selectionForwardBtn.classList.toggle('hide', cantForward);
     this.selectionDeleteBtn && this.selectionDeleteBtn.classList.toggle('hide', cantDelete);
   };
 
   protected onToggleSelection = (forwards: boolean, animate: boolean) => {
-    SetTransition(this.searchSuper.navScrollableContainer, 'is-selecting', forwards, animate ? 200 : 0, () => {
-      if(!this.isSelecting) {
-        this.selectionContainer.remove();
-        this.selectionContainer =
-          this.selectionForwardBtn =
-          this.selectionDeleteBtn =
-          null;
-        this.selectedText = undefined;
+    SetTransition({
+      element: this.searchSuper.navScrollableContainer,
+      className: 'is-selecting',
+      forwards,
+      duration: animate ? 200 : 0,
+      onTransitionEnd: () => {
+        if(!this.isSelecting) {
+          this.selectionContainer.remove();
+          this.selectionContainer =
+            this.selectionForwardBtn =
+            this.selectionDeleteBtn =
+            null;
+          this.selectedText = undefined;
+        }
       }
     });
 
-    SetTransition(this.searchSuper.container, 'is-selecting', forwards, 200);
+    SetTransition({
+      element: this.searchSuper.container,
+      className: 'is-selecting',
+      forwards,
+      duration: 200
+    });
 
     if(this.isSelecting) {
       if(!this.selectionContainer) {
@@ -620,15 +744,22 @@ export class SearchSelection extends AppSelection {
         this.selectionCountEl = document.createElement('div');
         this.selectionCountEl.classList.add(BASE_CLASS + '-count');
 
-        this.selectionGotoBtn = ButtonIcon(`message ${BASE_CLASS}-goto`);
-
         const attachClickOptions: AttachClickOptions = {listenerSetter: this.listenerSetter};
+
+        this.selectionPinBtn = ButtonIcon(`${this.isStoriesArchive ? 'pin' : 'unpin'} ${BASE_CLASS}-pin`);
+        attachClickEvent(this.selectionPinBtn, () => this.onPinClick(undefined, this.isStoriesArchive), attachClickOptions);
+
+        this.selectionGotoBtn = ButtonIcon(`message ${BASE_CLASS}-goto`);
         attachClickEvent(this.selectionGotoBtn, () => {
           const peerId = [...this.selectedMids.keys()][0];
           const mid = [...this.selectedMids.get(peerId)][0];
           this.cancelSelection();
 
-          appImManager.setInnerPeer({peerId, lastMsgId: mid});
+          appImManager.setInnerPeer({
+            peerId,
+            lastMsgId: mid,
+            threadId: this.searchSuper.mediaTab.type === 'saved' ? this.searchSuper.searchContext.peerId : this.searchSuper.searchContext.threadId
+          });
         }, attachClickOptions);
 
         this.selectionForwardBtn = ButtonIcon(`forward ${BASE_CLASS}-forward`);
@@ -638,7 +769,7 @@ export class SearchSelection extends AppSelection {
             obj[fromPeerId] = Array.from(mids).sort((a, b) => a - b);
           }
 
-          new PopupForward(obj, () => {
+          PopupElement.createPopup(PopupForward, obj, () => {
             this.cancelSelection();
           });
         }, attachClickOptions);
@@ -646,16 +777,28 @@ export class SearchSelection extends AppSelection {
         if(this.isPrivate) {
           this.selectionDeleteBtn = ButtonIcon(`delete danger ${BASE_CLASS}-delete`);
           attachClickEvent(this.selectionDeleteBtn, () => {
-            const peerId = [...this.selectedMids.keys()][0];
-            new PopupDeleteMessages(peerId, [...this.selectedMids.get(peerId)], 'chat', () => {
-              this.cancelSelection();
-            });
+            if(this.isStories) {
+              this.onDeleteStoriesClick();
+              return;
+            }
+
+            const peerId = this.searchSuper.searchContext.peerId;
+            PopupElement.createPopup(
+              PopupDeleteMessages,
+              peerId,
+              this.getSelectedMids(),
+              ChatType.Chat,
+              () => {
+                this.cancelSelection();
+              }
+            );
           }, attachClickOptions);
         }
 
         this.selectionContainer.append(...[
           btnCancel,
           this.selectionCountEl,
+          this.selectionPinBtn,
           this.selectionGotoBtn,
           this.selectionForwardBtn,
           this.selectionDeleteBtn
@@ -712,7 +855,10 @@ export default class ChatSelection extends AppSelection {
       targetLookupClassName: 'bubble',
       lookupBetweenParentClassName: 'bubbles-inner',
       lookupBetweenElementsQuery: '.bubble:not(.is-multiple-documents), .grouped-item',
-      isScheduled: chat.type === 'scheduled'
+      onTouchLongPress: () => {
+        const {replySwipeHandler} = this.chat.bubbles;
+        replySwipeHandler?.reset();
+      }
     });
   }
 
@@ -730,12 +876,13 @@ export default class ChatSelection extends AppSelection {
     const ret = super.toggleSelection(toggleCheckboxes, forceSelection);
 
     if(ret && toggleCheckboxes) {
-      for(const mid in this.bubbles.bubbles) {
-        if(this.bubbles.skippedMids.has(+mid)) {
+      const history = this.bubbles.getRenderedHistory('asc');
+      for(const fullMid of history) {
+        if(this.bubbles.skippedMids.has(fullMid)) {
           continue;
         }
 
-        const bubble = this.bubbles.bubbles[mid];
+        const bubble = this.bubbles.getBubble(fullMid);
         this.toggleElementCheckbox(bubble, this.isSelecting);
       }
     }
@@ -761,15 +908,16 @@ export default class ChatSelection extends AppSelection {
     if(!this.canSelectBubble(bubble)) return;
 
     const mid = +bubble.dataset.mid;
+    const peerId = bubble.dataset.peerId.toPeerId();
 
     const isGrouped = bubble.classList.contains('is-grouped');
     if(isGrouped) {
       if(!this.isGroupedBubbleSelected(bubble)) {
-        const set = this.selectedMids.get(this.chat.peerId);
+        const set = this.selectedMids.get(peerId);
         if(set) {
           // const mids = await this.chat.getMidsByMid(mid);
           const mids = this.getMidsFromGroupContainer(bubble);
-          mids.forEach((mid) => set.delete(mid));
+          mids.forEach(({mid}) => set.delete(mid));
         }
       }
 
@@ -778,7 +926,7 @@ export default class ChatSelection extends AppSelection {
       return;
     }
 
-    if(!this.toggleMid(this.chat.peerId, mid)) {
+    if(!this.toggleMid(peerId, mid)) {
       return;
     }
 
@@ -794,11 +942,11 @@ export default class ChatSelection extends AppSelection {
       }
     }
 
-    this.updateElementSelection(bubble, this.isMidSelected(this.chat.peerId, mid));
+    this.updateElementSelection(bubble, this.isMidSelected(peerId, mid));
   };
 
   protected toggleByMid = async(peerId: PeerId, mid: number) => {
-    const mounted = await this.bubbles.getMountedBubble(mid);
+    const mounted = await this.bubbles.getMountedBubble(makeFullMid(peerId, mid));
     if(mounted) {
       this.toggleByElement(mounted.bubble);
     }
@@ -820,12 +968,17 @@ export default class ChatSelection extends AppSelection {
       elements.push(groupContainer);
     }
 
-    return elements.map((element) => +element.dataset.mid);
+    return elements.map((element) => {
+      return {
+        mid: +element.dataset.mid,
+        peerId: element.dataset.peerId.toPeerId()
+      }
+    });
   }
 
   protected isGroupedMidsSelected(groupContainer: HTMLElement) {
     const mids = this.getMidsFromGroupContainer(groupContainer);
-    const selectedMids = mids.filter((mid) => this.isMidSelected(this.chat.peerId, mid));
+    const selectedMids = mids.filter(({peerId, mid}) => this.isMidSelected(peerId, mid));
     return mids.length === selectedMids.length;
   }
 
@@ -851,8 +1004,10 @@ export default class ChatSelection extends AppSelection {
   }
 
   public canSelectBubble(bubble: HTMLElement) {
-    return !bubble.classList.contains('service') &&
+    return bubble &&
+      !bubble.classList.contains('service') &&
       !bubble.classList.contains('is-outgoing') &&
+      !bubble.classList.contains('is-error') &&
       !bubble.classList.contains('bubble-first') &&
       !bubble.classList.contains('avoid-selection');
   }
@@ -860,23 +1015,29 @@ export default class ChatSelection extends AppSelection {
   protected onToggleSelection = async(forwards: boolean, animate: boolean) => {
     const {needTranslateX, widthFrom, widthTo} = await this.chat.input.center(animate);
 
-    SetTransition(this.listenElement, 'is-selecting', forwards, animate ? 200 : 0, () => {
-      if(!this.isSelecting) {
-        this.selectionInputWrapper.remove();
-        this.selectionInputWrapper =
-          this.selectionContainer =
-          this.selectionSendNowBtn =
-          this.selectionForwardBtn =
-          this.selectionDeleteBtn =
-          this.selectionLeft =
-          this.selectionRight =
-          null;
-        this.selectedText = undefined;
-      }
+    SetTransition({
+      element: this.listenElement,
+      className: 'is-selecting',
+      forwards,
+      duration: animate ? 200 : 0,
+      onTransitionEnd: () => {
+        if(!this.isSelecting) {
+          this.selectionInputWrapper.remove();
+          this.selectionInputWrapper =
+            this.selectionContainer =
+            this.selectionSendNowBtn =
+            this.selectionForwardBtn =
+            this.selectionDeleteBtn =
+            this.selectionLeft =
+            this.selectionRight =
+            null;
+          this.selectedText = undefined;
+        }
 
-      /* fastRaf(() => {
-        this.bubbles.onScroll();
-      }); */
+        /* fastRaf(() => {
+          this.bubbles.onScroll();
+        }); */
+      }
     });
 
     // const chatInput = this.appImManager.chatInput;
@@ -900,11 +1061,11 @@ export default class ChatSelection extends AppSelection {
         this.selectionCountEl = document.createElement('div');
         this.selectionCountEl.classList.add('selection-container-count');
 
-        if(this.chat.type === 'scheduled') {
+        if(this.chat.type === ChatType.Scheduled) {
           this.selectionSendNowBtn = Button('btn-primary btn-transparent btn-short text-bold selection-container-send', {icon: 'send2'});
           this.selectionSendNowBtn.append(i18n('MessageScheduleSend'));
           attachClickEvent(this.selectionSendNowBtn, () => {
-            new PopupSendNow(this.chat.peerId, [...this.selectedMids.get(this.chat.peerId)], () => {
+            PopupElement.createPopup(PopupSendNow, this.chat.peerId, [...this.selectedMids.get(this.chat.peerId)], () => {
               this.cancelSelection();
             });
           }, attachClickOptions);
@@ -917,7 +1078,7 @@ export default class ChatSelection extends AppSelection {
               obj[fromPeerId] = Array.from(mids).sort((a, b) => a - b);
             }
 
-            new PopupForward(obj, () => {
+            PopupElement.createPopup(PopupForward, obj, () => {
               this.cancelSelection();
             });
           }, attachClickOptions);
@@ -926,9 +1087,19 @@ export default class ChatSelection extends AppSelection {
         this.selectionDeleteBtn = Button('btn-primary btn-transparent danger text-bold selection-container-delete', {icon: 'delete'});
         this.selectionDeleteBtn.append(i18n('Delete'));
         attachClickEvent(this.selectionDeleteBtn, () => {
-          new PopupDeleteMessages(this.chat.peerId, [...this.selectedMids.get(this.chat.peerId)], this.chat.type, () => {
-            this.cancelSelection();
-          });
+          // if(TEST_BUBBLES_DELETION) {
+          //   return this.chat.bubbles.deleteMessagesByIds(this.getSelectedMids(), true);
+          // }
+
+          PopupElement.createPopup(
+            PopupDeleteMessages,
+            this.chat.peerId,
+            this.getSelectedMids(),
+            this.chat.type,
+            () => {
+              this.cancelSelection();
+            }
+          );
         }, attachClickOptions);
 
         const left = this.selectionLeft = document.createElement('div');
@@ -958,9 +1129,10 @@ export default class ChatSelection extends AppSelection {
         void this.selectionInputWrapper.offsetLeft; // reflow
         // background.style.opacity = '';
         this.selectionInputWrapper.style.opacity = '';
-        left.style.transform = '';
-        right.style.transform = '';
       }
+
+      this.selectionLeft.style.transform = '';
+      this.selectionRight.style.transform = '';
     } else if(this.selectionLeft && translateButtonsX !== undefined) {
       this.selectionLeft.style.transform = `translateX(-${translateButtonsX}px)`;
       this.selectionRight.style.transform = `translateX(${translateButtonsX}px)`;
@@ -969,23 +1141,23 @@ export default class ChatSelection extends AppSelection {
 
   protected onUpdateContainer = (cantForward: boolean, cantDelete: boolean, cantSend: boolean) => {
     replaceContent(this.selectionCountEl, i18n('messages', [this.length()]));
-    this.selectionSendNowBtn && this.selectionSendNowBtn.toggleAttribute('disabled', cantSend);
-    this.selectionForwardBtn && this.selectionForwardBtn.toggleAttribute('disabled', cantForward);
-    this.selectionDeleteBtn.toggleAttribute('disabled', cantDelete);
+    this.selectionSendNowBtn?.toggleAttribute('disabled', cantSend);
+    this.selectionForwardBtn?.toggleAttribute('disabled', cantForward);
+    this.selectionDeleteBtn?.toggleAttribute('disabled', cantDelete);
   };
 
   protected onCancelSelection = async() => {
-    return;
-    const promises: Promise<HTMLElement>[] = [];
-    for(const [peerId, mids] of this.selectedMids) {
-      for(const mid of mids) {
-        promises.push(this.bubbles.getMountedBubble(mid).then((m) => m?.bubble));
-      }
-    }
+    // return;
+    // const promises: Promise<HTMLElement>[] = [];
+    // for(const [peerId, mids] of this.selectedMids) {
+    //   for(const mid of mids) {
+    //     promises.push(this.bubbles.getMountedBubble(mid).then((m) => m?.bubble));
+    //   }
+    // }
 
-    const bubbles = filterUnique((await Promise.all(promises)).filter(Boolean));
-    bubbles.forEach((bubble) => {
-      this.toggleByElement(bubble);
-    });
+    // const bubbles = filterUnique((await Promise.all(promises)).filter(Boolean));
+    // bubbles.forEach((bubble) => {
+    //   this.toggleByElement(bubble);
+    // });
   };
 }

@@ -4,7 +4,6 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {SettingSection} from '../..';
 import {AccountPassword} from '../../../../layer';
 import Button from '../../../button';
 import PasswordInputField from '../../../passwordInputField';
@@ -14,6 +13,7 @@ import AppTwoStepVerificationHintTab from './hint';
 import {InputState} from '../../../inputField';
 import cancelEvent from '../../../../helpers/dom/cancelEvent';
 import {attachClickEvent} from '../../../../helpers/dom/clickEvent';
+import SettingSection from '../../../settingSection';
 
 export default class AppTwoStepVerificationReEnterPasswordTab extends SliderSuperTab {
   public state: AccountPassword;
@@ -21,7 +21,7 @@ export default class AppTwoStepVerificationReEnterPasswordTab extends SliderSupe
   public plainPassword: string;
   public newPassword: string;
 
-  protected init() {
+  public init() {
     this.container.classList.add('two-step-verification', 'two-step-verification-enter-password', 'two-step-verification-re-enter-password');
     this.setTitle('PleaseReEnterPassword');
 
@@ -44,7 +44,7 @@ export default class AppTwoStepVerificationReEnterPasswordTab extends SliderSupe
     inputWrapper.append(passwordInputField.container, btnContinue);
     section.content.append(monkey.container, inputWrapper);
 
-    this.scrollable.container.append(section.container);
+    this.scrollable.append(section.container);
 
     passwordInputField.input.addEventListener('keypress', (e) => {
       if(passwordInputField.input.classList.contains('error')) {

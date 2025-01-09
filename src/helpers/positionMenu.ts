@@ -4,6 +4,7 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
+import I18n from '../lib/langPack';
 import mediaSizes from './mediaSizes';
 
 export type MenuPositionPadding = {
@@ -17,19 +18,26 @@ const PADDING_TOP = 8;
 const PADDING_BOTTOM = PADDING_TOP;
 const PADDING_LEFT = 8;
 const PADDING_RIGHT = PADDING_LEFT;
-export default function positionMenu({pageX, pageY}: MouseEvent | Touch, elem: HTMLElement, side?: 'left' | 'right' | 'center', additionalPadding?: MenuPositionPadding) {
+export default function positionMenu(e: MouseEvent | Touch | TouchEvent, elem: HTMLElement, side?: 'left' | 'right' | 'center', additionalPadding?: MenuPositionPadding) {
+  if((e as TouchEvent).touches) {
+    e = (e as TouchEvent).touches[0];
+  }
+
+  const {pageX, pageY} = e as Touch;
   // let {clientX, clientY} = e;
 
   // * side mean the OPEN side
 
-  const getScrollWidthFromElement = (Array.from(elem.children) as HTMLElement[]).find((element) => element.classList.contains('btn-menu-item') && !element.classList.contains('hide')) || elem;
+  const getScrollWidthFromElement = (Array.from(elem.children) as HTMLElement[]).find((element) => element.classList.contains('btn-menu-items') || (element.classList.contains('btn-menu-item') && !element.classList.contains('hide'))) || elem;
 
-  const {scrollWidth: menuWidth} = getScrollWidthFromElement;
+  let {scrollWidth: menuWidth} = getScrollWidthFromElement;
   const {scrollHeight: menuHeight} = elem;
   // let {innerWidth: windowWidth, innerHeight: windowHeight} = window;
   const rect = document.body.getBoundingClientRect();
   const windowWidth = rect.width;
   const windowHeight = rect.height;
+
+  menuWidth += getScrollWidthFromElement.offsetLeft * 2;
 
   let paddingTop = PADDING_TOP, paddingRight = PADDING_RIGHT, paddingBottom = PADDING_BOTTOM, paddingLeft = PADDING_LEFT;
   if(additionalPadding) {
@@ -39,7 +47,8 @@ export default function positionMenu({pageX, pageY}: MouseEvent | Touch, elem: H
     if(additionalPadding.left) paddingLeft += additionalPadding.left;
   }
 
-  side = mediaSizes.isMobile ? 'right' : 'left';
+  if(I18n.isRTL) side = mediaSizes.isMobile ? 'left' : 'right';
+  else side = mediaSizes.isMobile ? 'right' : 'left';
   let verticalSide: 'top' /* | 'bottom' */ | 'center' = 'top';
 
   const maxTop = windowHeight - menuHeight - paddingBottom;
@@ -127,7 +136,7 @@ export default function positionMenu({pageX, pageY}: MouseEvent | Touch, elem: H
     // (verticalSide === 'center' ? verticalSide : (verticalSide === 'bottom' ? 'top' : 'bottom')) +
     (verticalSide === 'center' ? verticalSide : 'bottom') +
     '-' +
-    (side === 'center' ? side : (side === 'left' ? 'right' : 'left')));
+    (side === 'center' ? side : ((I18n.isRTL ? side === 'right' : side === 'left') ? 'right' : 'left')));
 
   return {
     width: menuWidth,

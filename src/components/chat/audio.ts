@@ -4,9 +4,7 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import type {AppMessagesManager} from '../../lib/appManagers/appMessagesManager';
 import type ChatTopbar from './topbar';
-import rootScope from '../../lib/rootScope';
 import appMediaPlaybackController, {AppMediaPlaybackController} from '../appMediaPlaybackController';
 import DivAndCaption from '../divAndCaption';
 import PinnedContainer from './pinnedContainer';
@@ -23,13 +21,20 @@ import MediaProgressLine from '../mediaProgressLine';
 import VolumeSelector from '../volumeSelector';
 import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
 import {AppManagers} from '../../lib/appManagers/managers';
+import Icon from '../icon';
+import {replaceButtonIcon} from '../button';
+import getFwdFromName from '../../lib/appManagers/utils/messages/getFwdFromName';
+import toHHMMSS from '../../helpers/string/toHHMMSS';
+import {PlaybackRateButton} from '../../lib/mediaPlayer';
 
 export default class ChatAudio extends PinnedContainer {
   private toggleEl: HTMLElement;
   private progressLine: MediaProgressLine;
   private volumeSelector: VolumeSelector;
-  private fasterEl: HTMLElement;
+  private playbackRateButton: ReturnType<typeof PlaybackRateButton>;
   private repeatEl: HTMLButtonElement;
+  private time: HTMLElement;
+  private duration: number;
 
   constructor(protected topbar: ChatTopbar, protected chat: Chat, protected managers: AppManagers) {
     super({
@@ -39,21 +44,29 @@ export default class ChatAudio extends PinnedContainer {
       className: 'audio',
       divAndCaption: new DivAndCaption(
         'pinned-audio',
-        (title: string | HTMLElement | DocumentFragment, subtitle: string | HTMLElement | DocumentFragment) => {
-          replaceContent(this.divAndCaption.title, title);
-          replaceContent(this.divAndCaption.subtitle, subtitle);
+        (options) => {
+          replaceContent(this.divAndCaption.title, options.title);
+          this.divAndCaption.subtitle.replaceChildren(
+            this.time,
+            ' • ',
+            options.subtitle
+          );
         }
       ),
       onClose: () => {
-        appMediaPlaybackController.stop();
+        appMediaPlaybackController.stop(undefined, true);
       },
-      floating: true
+      floating: true,
+      height: 52
     });
 
     this.divAndCaption.border.remove();
 
     const prevEl = ButtonIcon('fast_rewind active', {noRipple: true});
     const nextEl = ButtonIcon('fast_forward active', {noRipple: true});
+
+    this.time = document.createElement('span');
+    this.time.classList.add('pinned-audio-time');
 
     const attachClick = (elem: HTMLElement, callback: () => void) => {
       attachClickEvent(elem, (e) => {
@@ -71,13 +84,13 @@ export default class ChatAudio extends PinnedContainer {
     });
 
     this.toggleEl = ButtonIcon('', {noRipple: true});
-    this.toggleEl.classList.add('active', 'pinned-audio-ico', 'tgico');
+    this.toggleEl.classList.add('active', 'pinned-audio-ico');
     attachClick(this.toggleEl, () => {
       appMediaPlaybackController.toggle();
     });
     this.wrapper.prepend(this.wrapper.firstElementChild, prevEl, this.toggleEl, nextEl);
 
-    this.volumeSelector = new VolumeSelector(this.listenerSetter, true);
+    this.volumeSelector = new VolumeSelector({listenerSetter: this.listenerSetter, vertical: true, useGlobalVolume: 'auto'});
     const volumeProgressLineContainer = document.createElement('div');
     volumeProgressLineContainer.classList.add('progress-line-container');
     volumeProgressLineContainer.append(this.volumeSelector.container);
@@ -100,17 +113,20 @@ export default class ChatAudio extends PinnedContainer {
       }
     });
 
-    const fasterEl = this.fasterEl = ButtonIcon('playback_2x', {noRipple: true});
-    attachClick(fasterEl, () => {
-      appMediaPlaybackController.playbackRate = fasterEl.classList.contains('active') ? 1 : 1.75;
-    });
+    this.playbackRateButton = PlaybackRateButton({direction: 'bottom-left'});
 
-    this.wrapperUtils.prepend(this.volumeSelector.btn, fasterEl, this.repeatEl);
+    this.wrapperUtils.prepend(this.volumeSelector.btn, this.playbackRateButton.element, this.repeatEl);
 
     const progressWrapper = document.createElement('div');
     progressWrapper.classList.add('pinned-audio-progress-wrapper');
 
-    this.progressLine = new MediaProgressLine(undefined, undefined, true, true);
+    this.progressLine = new MediaProgressLine({
+      withTransition: true,
+      useTransform: true,
+      onTimeUpdate: (time) => {
+        this.time.textContent = toHHMMSS(time, true)/*  + ' / ' + toHHMMSS(this.duration, true) */;
+      }
+    });
     this.progressLine.container.classList.add('pinned-audio-progress');
     progressWrapper.append(this.progressLine.container);
     this.wrapper.insertBefore(progressWrapper, this.wrapperUtils);
@@ -128,21 +144,24 @@ export default class ChatAudio extends PinnedContainer {
   }
 
   public destroy() {
-    if(this.progressLine) {
-      this.progressLine.removeListeners();
-    }
+    super.destroy();
+    this.progressLine?.removeListeners();
   }
 
   private onPlaybackParams = (playbackParams: ReturnType<AppMediaPlaybackController['getPlaybackParams']>) => {
-    this.fasterEl.classList.toggle('active', playbackParams.playbackRate > 1);
+    this.playbackRateButton.setIcon();
+    this.playbackRateButton.element.classList.toggle('active', playbackParams.playbackRate !== 1);
 
-    this.repeatEl.classList.remove('tgico-audio_repeat', 'tgico-audio_repeat_single');
-    this.repeatEl.classList.add(playbackParams.loop ? 'tgico-audio_repeat_single' : 'tgico-audio_repeat');
+    this.repeatEl.querySelector('.button-icon').replaceWith(Icon(playbackParams.loop ? 'audio_repeat_single' : 'audio_repeat', 'button-icon'));
     this.repeatEl.classList.toggle('active', playbackParams.loop || playbackParams.round);
   };
 
+  private setPlayIcon(paused: boolean) {
+    replaceButtonIcon(this.toggleEl, paused ? 'play' : 'pause');
+  }
+
   private onPause = () => {
-    this.toggleEl.classList.remove('flip-icon');
+    this.setPlayIcon(true);
   };
 
   private onStop = () => {
@@ -153,7 +172,7 @@ export default class ChatAudio extends PinnedContainer {
     let title: string | HTMLElement | DocumentFragment, subtitle: string | HTMLElement | DocumentFragment;
     const isMusic = doc.type !== 'voice' && doc.type !== 'round';
     if(!isMusic) {
-      title = new PeerTitle({peerId: message.fromId, fromName: message.fwd_from?.from_name}).element;
+      title = new PeerTitle({peerId: message.fromId, fromName: getFwdFromName(message.fwd_from)}).element;
 
       // subtitle = 'Voice message';
       subtitle = formatFullSentTime(message.date);
@@ -163,17 +182,23 @@ export default class ChatAudio extends PinnedContainer {
       subtitle = audioAttribute?.performer ? wrapEmojiText(audioAttribute.performer) : i18n('AudioUnknownArtist');
     }
 
-    this.fasterEl.classList.toggle('hide', isMusic);
+    // this.fasterEl.classList.toggle('hide', isMusic);
     this.repeatEl.classList.toggle('hide', !isMusic);
 
     this.onPlaybackParams(playbackParams);
-    this.volumeSelector.setVolume();
+    this.volumeSelector.setGlobalVolume();
 
-    this.progressLine.setMedia(media);
+    this.progressLine.setMedia({
+      media,
+      duration: this.duration = doc.duration
+    });
 
-    this.fill(title, subtitle, message);
-    // this.toggleEl.classList.add('flip-icon');
-    this.toggleEl.classList.toggle('flip-icon', !media.paused);
+    this.fill({
+      title,
+      subtitle,
+      message
+    });
+    this.setPlayIcon(media.paused);
     this.toggle(false);
   };
 }

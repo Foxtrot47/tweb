@@ -4,12 +4,11 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {SettingSection} from '..';
 import Button from '../../button';
 import Row from '../../row';
 import {Authorization} from '../../../layer';
 import {formatDateAccordingToTodayNew} from '../../../helpers/date';
-import ButtonMenu from '../../buttonMenu';
+import {ButtonMenuSync} from '../../buttonMenu';
 import {toast} from '../../toast';
 import I18n from '../../../lib/langPack';
 import PopupPeer from '../../popups/peer';
@@ -21,31 +20,28 @@ import findAndSplice from '../../../helpers/array/findAndSplice';
 import {attachContextMenuListener} from '../../../helpers/dom/attachContextMenuListener';
 import positionMenu from '../../../helpers/positionMenu';
 import contextMenuController from '../../../helpers/contextMenuController';
+import SettingSection from '../../settingSection';
+import PopupElement from '../../popups';
 
 export default class AppActiveSessionsTab extends SliderSuperTabEventable {
   public authorizations: Authorization.authorization[];
   private menuElement: HTMLElement;
 
-  protected init() {
-    this.header.classList.add('with-border');
+  public init() {
     this.container.classList.add('active-sessions-container');
     this.setTitle('SessionsTitle');
 
     const Session = (auth: Authorization.authorization) => {
       const row = new Row({
         title: [auth.app_name, auth.app_version].join(' '),
-        subtitle: [auth.ip, auth.country].join(' - '),
+        subtitle: [auth.ip, auth.country].filter(Boolean).join(' - '),
         clickable: true,
         titleRight: auth.pFlags.current ? undefined : formatDateAccordingToTodayNew(new Date(Math.max(auth.date_active, auth.date_created) * 1000))
       });
 
       row.container.dataset.hash = '' + auth.hash;
 
-      const midtitle = document.createElement('div');
-      midtitle.classList.add('row-midtitle');
-      midtitle.innerHTML = [auth.device_model, auth.system_version || auth.platform].filter(Boolean).join(', ');
-
-      row.subtitle.parentElement.insertBefore(midtitle, row.subtitle);
+      row.midtitle.textContent = [auth.device_model, auth.system_version || auth.platform].filter(Boolean).join(', ');
 
       return row;
     };
@@ -66,7 +62,7 @@ export default class AppActiveSessionsTab extends SliderSuperTabEventable {
       if(authorizations.length) {
         const btnTerminate = Button('btn-primary btn-transparent danger', {icon: 'stop', text: 'TerminateAllSessions'});
         attachClickEvent(btnTerminate, (e) => {
-          new PopupPeer('revoke-session', {
+          PopupElement.createPopup(PopupPeer, 'revoke-session', {
             buttons: [{
               langKey: 'Terminate',
               isDanger: true,
@@ -84,7 +80,7 @@ export default class AppActiveSessionsTab extends SliderSuperTabEventable {
             titleLangKey: 'AreYouSureSessionsTitle',
             descriptionLangKey: 'AreYouSureSessions'
           }).show();
-        });
+        }, {listenerSetter: this.listenerSetter});
 
         section.content.append(btnTerminate);
       }
@@ -107,7 +103,7 @@ export default class AppActiveSessionsTab extends SliderSuperTabEventable {
 
     this.scrollable.append(otherSection.container);
 
-    const onError = (err: any) => {
+    const onError = (err: ApiError) => {
       if(err.type === 'FRESH_RESET_AUTHORISATION_FORBIDDEN') {
         toast(I18n.format('RecentSessions.Error.FreshReset', true));
       }
@@ -117,7 +113,7 @@ export default class AppActiveSessionsTab extends SliderSuperTabEventable {
     const onTerminateClick = () => {
       const hash = target.dataset.hash;
 
-      new PopupPeer('revoke-session', {
+      PopupElement.createPopup(PopupPeer, 'revoke-session', {
         buttons: [{
           langKey: 'Terminate',
           isDanger: true,
@@ -135,28 +131,34 @@ export default class AppActiveSessionsTab extends SliderSuperTabEventable {
       }).show();
     };
 
-    const element = this.menuElement = ButtonMenu([{
-      icon: 'stop',
-      text: 'Terminate',
-      onClick: onTerminateClick
-    }]);
+    const element = this.menuElement = ButtonMenuSync({
+      buttons: [{
+        icon: 'stop',
+        text: 'Terminate',
+        onClick: onTerminateClick
+      }]
+    });
     element.id = 'active-sessions-contextmenu';
     element.classList.add('contextmenu');
 
     document.getElementById('page-chats').append(element);
 
-    attachContextMenuListener(this.scrollable.container, (e) => {
-      target = findUpClassName(e.target, 'row');
-      if(!target || target.dataset.hash === '0') {
-        return;
-      }
+    attachContextMenuListener({
+      element: this.scrollable.container,
+      callback: (e) => {
+        target = findUpClassName(e.target, 'row');
+        if(!target || target.dataset.hash === '0') {
+          return;
+        }
 
-      if(e instanceof MouseEvent) e.preventDefault();
-      // smth
-      if(e instanceof MouseEvent) e.cancelBubble = true;
+        if(e instanceof MouseEvent) e.preventDefault();
+        // smth
+        if(e instanceof MouseEvent) e.cancelBubble = true;
 
-      positionMenu(e, element);
-      contextMenuController.openBtnMenu(element);
+        positionMenu(e, element);
+        contextMenuController.openBtnMenu(element);
+      },
+      listenerSetter: this.listenerSetter
     });
 
     attachClickEvent(this.scrollable.container, (e) => {
@@ -166,14 +168,11 @@ export default class AppActiveSessionsTab extends SliderSuperTabEventable {
       }
 
       onTerminateClick();
-    });
+    }, {listenerSetter: this.listenerSetter});
   }
 
   onCloseAfterTimeout() {
-    if(this.menuElement) {
-      this.menuElement.remove();
-    }
-
+    this.menuElement?.remove();
     return super.onCloseAfterTimeout();
   }
 }

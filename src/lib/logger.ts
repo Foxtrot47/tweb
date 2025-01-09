@@ -95,7 +95,7 @@ export type Logger = {
   groupEnd(...args: any[]): void;
   setPrefix(newPrefix: string): void;
   setLevel(level: 0 | 1 | 2 | 3 | 4): void;
-  bindPrefix(prefix: string): Logger;
+  bindPrefix(prefix: string, type?: LogTypes): Logger;
 };
 
 const methods: ['debug' | 'info' | 'warn' | 'error' | 'assert' | 'trace'/*  | 'log' */ | 'group' | 'groupCollapsed' | 'groupEnd', LogTypes][] = [
@@ -151,8 +151,18 @@ export function logger(prefix: string, type: LogTypes = LogTypes.Log | LogTypes.
     type = LOG_LEVELS.slice(0, level + 1).reduce((acc, v) => acc | v, 0) as any;
   };
 
-  log.bindPrefix = function(prefix: string) {
-    return logger(`${originalPrefix}] [${prefix}`, type, ignoreDebugReset, originalStyle);
+  const prefixCache: {[prefix: string]: Logger} = {};
+  log.bindPrefix = function(prefix: string, _type = type) {
+    return prefixCache[prefix] ??= logger(
+      // `${originalPrefix}] ${LOGGER_STYLES.fg.magenta}[${prefix}`,
+      `${originalPrefix}] ${STYLES_SUPPORTED && originalStyle ? LOGGER_STYLES.reset : ''}[${prefix}`,
+      // `${originalPrefix}] [${prefix}`,
+      _type,
+      ignoreDebugReset,
+      // originalStyle || LOGGER_STYLES.reset
+      originalStyle
+      // LOGGER_STYLES.reset
+    );
   };
 
   return log;

@@ -5,21 +5,49 @@
  */
 
 .reactions {
-  &-block {
+  &-like-block {
+    --margin-vertical: .375rem;
+    --margin-horizontal: .375rem;
     display: flex;
     flex-wrap: wrap;
-    user-select: none;
+    margin-top: calc(var(--margin-vertical) / -2);
 
     &.has-no-reactions {
       display: unset;
     }
   }
 
-  &-inline {
-    display: inline-flex;
+  &-block {
+    margin-top: -.125rem;
+  }
 
-    &:not(:empty) {
-      margin-right: .125rem;
+  &-renderer {
+    inset: auto !important;
+
+    &-canvas {
+      z-index: 1 !important;
     }
+  }
+
+  &-tag {
+    &.is-locked {
+      .reaction-tag {
+        opacity: .6;
+      }
+    }
+  }
+
+  // &-inline {
+  //   display: inline-flex;
+
+  //   &:not(:empty) {
+  //     margin-right: .125rem;
+  //   }
+  // }
+
+  .tooltip {
+    height: 3.25rem;
+    display: flex;
+    align-items: center;
   }
 }

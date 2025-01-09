@@ -3,7 +3,10 @@
 html {
   box-sizing: border-box;
 }
-*, *:before, *:after {
+
+*,
+*:before,
+*:after {
   box-sizing: inherit;
 }
 
@@ -31,17 +34,12 @@ button {
   border: none;
   cursor: pointer;
   padding: 0;
+  font-size: inherit;
 }
 
 img, 
 video {
   -webkit-user-drag: none;
-}
-
-// Positioning
-.valign-wrapper {
-  display: flex;
-  align-items: center;
 }
 
 // Z-levels
@@ -120,7 +118,8 @@ Utility Classes
   display: inline;
 }
 
-.center-align, .text-center {
+.center-align,
+.text-center {
   text-align: center;
 }
 
@@ -148,7 +147,15 @@ Utility Classes
 }
 
 .text-bold {
-  font-weight: 500 !important;
+  font-weight: var(--font-weight-bold) !important;
+}
+
+.text-normal {
+  font-weight: var(--font-weight-normal) !important;
+}
+
+.text-capitalize {
+  text-transform: capitalize;
 }
 
 // * fix text fractional width
@@ -158,6 +165,10 @@ Utility Classes
 
 .text-uppercase {
   text-transform: uppercase;
+}
+
+.text-top {
+  vertical-align: top;
 }
 
 .pre-wrap {
@@ -180,6 +191,18 @@ Utility Classes
 .reflect-x {
   transform: scaleX(-1);
 }
+
+[dir="auto"] {
+  unicode-bidi: plaintext;
+}
+
+.is-rtl [dir="auto"] {
+  direction: inherit;
+}
+
+// .is-rtl {
+//   text-align: right;
+// }
 
 /* .flex-grow {
   flex-grow: 1;

@@ -4,12 +4,13 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {SettingSection} from '../..';
 import {attachClickEvent} from '../../../../helpers/dom/clickEvent';
 import {AccountPassword} from '../../../../layer';
 import {_i18n} from '../../../../lib/langPack';
 import Button from '../../../button';
+import PopupElement from '../../../popups';
 import PopupPeer from '../../../popups/peer';
+import SettingSection from '../../../settingSection';
 import {SliderSuperTab} from '../../../slider';
 import wrapStickerEmoji from '../../../wrappers/stickerEmoji';
 import AppSettingsTab from '../settings';
@@ -20,7 +21,7 @@ export default class AppTwoStepVerificationTab extends SliderSuperTab {
   public state: AccountPassword;
   public plainPassword: string;
 
-  protected init() {
+  public init() {
     this.container.classList.add('two-step-verification', 'two-step-verification-main');
     this.setTitle('TwoStepVerificationTitle');
 
@@ -57,7 +58,7 @@ export default class AppTwoStepVerificationTab extends SliderSuperTab {
       });
 
       attachClickEvent(btnDisablePassword, () => {
-        const popup = new PopupPeer('popup-disable-password', {
+        const popup = PopupElement.createPopup(PopupPeer, 'popup-disable-password', {
           buttons: [{
             langKey: 'Disable',
             callback: () => {
@@ -104,6 +105,6 @@ export default class AppTwoStepVerificationTab extends SliderSuperTab {
       });
     }
 
-    this.scrollable.container.append(section.container);
+    this.scrollable.append(section.container);
   }
 }

@@ -23,6 +23,7 @@ import {getFileNameByLocation} from '../../helpers/fileName';
 import getDocumentDownloadOptions from './utils/docs/getDocumentDownloadOptions';
 import getPhotoDownloadOptions from './utils/photos/getPhotoDownloadOptions';
 import apiManagerProxy from '../mtproto/mtprotoworker';
+import {IS_MOBILE_SAFARI} from '../../environment/userAgent';
 
 export type ResponseMethodBlob = 'blob';
 export type ResponseMethodJson = 'json';
@@ -111,14 +112,14 @@ export class AppDownloadManager {
   }
 
   public getNewDeferredForUpload<T extends Promise<any>>(fileName: string, promise: T) {
-    const deferred = this.getNewDeferred<InputFile>(fileName);
-    promise.then(deferred.resolve, deferred.reject);
+    const deferred: CancellablePromise<Awaited<T>> = this.getNewDeferred<InputFile>(fileName);
+    promise.then(deferred.resolve.bind(deferred), deferred.reject.bind(deferred));
 
     deferred.finally(() => {
       this.clearDownload(fileName);
     });
 
-    return deferred as CancellablePromise<Awaited<T>>;
+    return deferred;
   }
 
   private clearDownload(fileName: string, type?: DownloadType) {
@@ -142,7 +143,7 @@ export class AppDownloadManager {
     }
 
     deferred = this.getNewDeferred(fileName);
-    this.managers.appMessagesManager.getUploadPromise(fileName).then(deferred.resolve, deferred.reject);
+    this.managers.appMessagesManager.getUploadPromise(fileName).then(deferred.resolve.bind(deferred), deferred.reject.bind(deferred));
     return deferred;
   }
 
@@ -164,7 +165,7 @@ export class AppDownloadManager {
     if(deferred) return deferred;
 
     deferred = this.getNewDeferred<Blob>(fileName, type);
-    getPromise().then(deferred.resolve, deferred.reject);
+    getPromise().then(deferred.resolve.bind(deferred), deferred.reject.bind(deferred));
     return deferred;
   }
 
@@ -187,7 +188,12 @@ export class AppDownloadManager {
       }
 
       if(promiseBefore) {
-        return promiseBefore.then(() => cb(options));
+        return promiseBefore.then(() => {
+          return cb(options);
+        }, () => {
+          delete options.downloadId;
+          return cb(options);
+        });
       }
 
       return cb(options);
@@ -236,6 +242,16 @@ export class AppDownloadManager {
       options.thumb = (media as Photo.photo).sizes.slice().pop() as PhotoSize.photoSize;
     }
 
+    const USE_SW = !IS_MOBILE_SAFARI && !!apiManagerProxy.serviceMessagePort;
+    // const USE_SW = true;
+
+    const getOutFileName = () => {
+      const downloadOptions = isDocument ?
+        getDocumentDownloadOptions(media) :
+        getPhotoDownloadOptions(media as any, options.thumb as PhotoSize.photoSize);
+      return (options.media as MyDocument).file_name || getFileNameByLocation(downloadOptions.location);
+    };
+
     // const {fileName: cacheFileName} = getDownloadMediaDetails(options);
     // if(justAttach) {
     //   const promise = this.downloadsToDisc[cacheFileName];
@@ -246,12 +262,54 @@ export class AppDownloadManager {
 
     // const {downloadOptions, fileName} = getDownloadMediaDetails(options);
     // if(downloadOptions.size && downloadOptions.size > MAX_FILE_SAVE_SIZE) {
-    const id = '' + (Math.random() * 0x7FFFFFFF | 0);
-    // const id = 'test';
-    const url = `download/${id}`;
-    options.downloadId = id;
+    let url: string, pingPromise: Promise<any>, iframe: HTMLIFrameElement;
+    if(USE_SW) {
+      const id = '' + (Math.random() * 0x7FFFFFFF | 0);
+      // const id = 'test';
+      url = `d/${id}`;
+      options.downloadId = id;
 
-    const pingPromise = apiManagerProxy.pingServiceWorkerWithIframe();
+      pingPromise = apiManagerProxy.pingServiceWorkerWithIframe();
+
+      if(!justAttach) {
+        const {iframe: _iframe, onSuccess, onError} = this.createDownloadIframe(url);
+        iframe = _iframe;
+
+        // * 1. make sure that SW is alive with a ping
+        // * 2. send download request and wait for a pong (downloadRequestReceived)
+        // * 3. if pong is missing (something with request and can't handle it with iframe events),
+        // *    fallback to regular download
+        pingPromise = pingPromise.then(() => {
+          const deferred = deferredPromise<void>();
+
+          const onFinish = (good: boolean) => {
+            clearTimeout(timeout);
+            apiManagerProxy.serviceMessagePort.removeEventListener('downloadRequestReceived', onDownloadRequestReceived);
+            if(good) deferred.resolve();
+            else deferred.reject();
+          };
+
+          const onDownloadRequestReceived = (downloadId: string) => {
+            if(downloadId === id) {
+              onFinish(true);
+            }
+          };
+
+          apiManagerProxy.serviceMessagePort.addEventListener('downloadRequestReceived', onDownloadRequestReceived);
+
+          const timeout = window.setTimeout(() => {
+            onFinish(false);
+          }, 1500);
+
+          onSuccess();
+
+          return deferred;
+        }, (err) => {
+          onError();
+          throw err;
+        });
+      }
+    }
 
     const promise = this.downloadMedia(options, 'disc', pingPromise);
     // this.downloadsToDisc[cacheFileName] = promise;
@@ -259,29 +317,6 @@ export class AppDownloadManager {
     if(justAttach) {
       return promise;
     }
-
-    const iframe = document.createElement('iframe');
-    iframe.hidden = true;
-
-    pingPromise.then(() => {
-      iframe.src = url;
-      document.body.append(iframe);
-    });
-
-    // createDownloadAnchor(url, 'asd.txt');
-
-    // const events = [
-    //   'emptied',
-    //   'abort',
-    //   'suspend',
-    //   'reset',
-    //   'error',
-    //   'ended',
-    //   'load'
-    // ].forEach((event) => {
-    //   iframe.addEventListener(event, () => alert(event));
-    //   iframe.contentWindow.addEventListener(event, () => alert(event));
-    // });
 
     let element: HTMLElement, hadProgress = false;
     const onProgress = () => {
@@ -302,11 +337,7 @@ export class AppDownloadManager {
       }
 
       const url = URL.createObjectURL(blob);
-      const downloadOptions = isDocument ?
-        getDocumentDownloadOptions(media) :
-        getPhotoDownloadOptions(media as any, options.thumb as PhotoSize.photoSize);
-      const fileName = (options.media as MyDocument).file_name || getFileNameByLocation(downloadOptions.location);
-      createDownloadAnchor(url, downloadOptions.fileName || fileName, () => {
+      createDownloadAnchor(url, getOutFileName(), () => {
         URL.revokeObjectURL(url);
       });
     }).catch(noop).finally(() => {
@@ -324,6 +355,39 @@ export class AppDownloadManager {
     });
 
     return promise;
+  }
+
+  private createDownloadIframe(url: string) {
+    const iframe = document.createElement('iframe');
+    iframe.hidden = true;
+
+    return {
+      iframe,
+      onSuccess: () => {
+        // const removeListeners = () => {
+        //   iframe.removeEventListener('load', onLoad);
+        //   iframe.removeEventListener('error', onError);
+        //   console.error('event', window.event);
+        // };
+
+        // const onLoad = () => {
+        //   removeListeners();
+        // };
+
+        // const onError = () => {
+        //   removeListeners();
+        // };
+
+        // iframe.addEventListener('load', onLoad);
+        // iframe.addEventListener('error', onError);
+
+        iframe.src = url;
+        document.body.append(iframe);
+      },
+      onError: () => {
+        console.error('falling back to normal download');
+      }
+    };
   }
 }
 

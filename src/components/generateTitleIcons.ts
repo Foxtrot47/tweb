@@ -5,24 +5,56 @@
  */
 
 import {Chat, User} from '../layer';
-import rootScope from '../lib/rootScope';
+import apiManagerProxy from '../lib/mtproto/mtprotoworker';
 import generateFakeIcon from './generateFakeIcon';
 import generatePremiumIcon from './generatePremiumIcon';
 import generateVerifiedIcon from './generateVerifiedIcon';
+import wrapEmojiStatus from './wrappers/emojiStatus';
 
-export default async function generateTitleIcons(peerId: PeerId) {
-  const elements: Element[] = [];
-  const peer: Chat | User = await rootScope.managers.appPeersManager.getPeer(peerId);
-  if((peer as Chat.channel).pFlags.verified) {
-    elements.push(generateVerifiedIcon());
+export default async function generateTitleIcons({
+  peerId,
+  noVerifiedIcon,
+  noFakeIcon,
+  noPremiumIcon,
+  peer,
+  wrapOptions
+}: {
+  peerId: PeerId,
+  wrapOptions: WrapSomethingOptions,
+  noVerifiedIcon?: boolean,
+  noFakeIcon?: boolean,
+  noPremiumIcon?: boolean,
+  peer?: Chat | User
+}) {
+  peer ??= apiManagerProxy.getPeer(peerId);
+  const elements: HTMLElement[] = [];
+  if(!peer) {
+    return elements;
   }
 
-  if((peer as Chat.channel).pFlags.fake || (peer as User.user).pFlags.scam) {
+  if(((peer as Chat.channel).pFlags.fake || (peer as User.user).pFlags.scam) && !noFakeIcon) {
     elements.push(generateFakeIcon((peer as User.user).pFlags.scam));
   }
 
-  if((peer as User.user).pFlags.premium) {
-    elements.push(generatePremiumIcon());
+  if(!noPremiumIcon && wrapOptions?.middleware) {
+    const emojiStatus = (peer as User.user | Chat.channel).emoji_status;
+    const isPremiumFeaturesHidden = await apiManagerProxy.isPremiumFeaturesHidden();
+    if(emojiStatus && emojiStatus._ !== 'emojiStatusEmpty' && !isPremiumFeaturesHidden) {
+      const {middleware} = wrapOptions;
+      const container = await wrapEmojiStatus({
+        emojiStatus,
+        wrapOptions
+      });
+
+      if(!middleware()) return elements;
+      elements.push(container);
+    } else if((peer as User.user).pFlags.premium && !isPremiumFeaturesHidden) {
+      elements.push(generatePremiumIcon());
+    }
+  }
+
+  if((peer as Chat.channel).pFlags.verified && !noVerifiedIcon) {
+    elements.push(generateVerifiedIcon());
   }
 
   return elements;

@@ -11,6 +11,7 @@
 
 import {Database} from '../../config/databases';
 import DATABASE_STATE from '../../config/databases/state';
+import {NOTIFICATION_BADGE_PATH, NOTIFICATION_ICON_PATH} from '../../config/notifications';
 import {IS_FIREFOX} from '../../environment/userAgent';
 import deepEqual from '../../helpers/object/deepEqual';
 import IDBStorage from '../files/idb';
@@ -19,6 +20,11 @@ import {ServicePushPingTaskPayload} from './serviceMessagePort';
 
 const ctx = self as any as ServiceWorkerGlobalScope;
 const defaultBaseUrl = location.protocol + '//' + location.hostname + location.pathname.split('/').slice(0, -1).join('/') + '/';
+
+// as in webPushApiManager.ts
+const PING_PUSH_TIMEOUT = 10000 + 1500;
+let lastPingTime = 0;
+let localNotificationsAvailable = true;
 
 export type PushNotificationObject = {
   loc_key: string,
@@ -29,7 +35,8 @@ export type PushNotificationObject = {
     chat_id?: string, // should be number
     from_id?: string, // should be number
     msg_id: string,
-    peerId?: string // should be number
+    peerId?: string, // should be number
+    silent?: string // can be '1'
   },
   sound?: string,
   random_id: number,
@@ -37,7 +44,8 @@ export type PushNotificationObject = {
   description: string,
   mute: string, // should be number
   title: string,
-
+  message?: string,
+} & {
   action?: 'mute1d' | 'push_settings', // will be set before postMessage to main thread
 };
 
@@ -55,28 +63,35 @@ class SomethingGetter<T extends Database<any>, Storage extends Record<string, an
     this.storage = new IDBStorage<T>(db, storeName);
   }
 
-  public async get<T extends keyof Storage>(key: T) {
-    if(this.cache[key] !== undefined) {
+  private getDefault<T extends keyof Storage>(key: T) {
+    const callback = this.defaults[key];
+    return typeof(callback) === 'function' ? callback() : callback;
+  }
+
+  public get<T extends keyof Storage>(key: T) {
+    if(this.cache.hasOwnProperty(key)) {
       return this.cache[key];
     }
 
-    let value: Storage[T];
-    try {
-      value = await this.storage.get(key as string);
-    } catch(err) {
+    const promise = this.storage.get(key as string) as Promise<Storage[T]>;
+    return promise.then((value) => value, () => undefined as Storage[T]).then((value) => {
+      if(this.cache.hasOwnProperty(key)) {
+        return this.cache[key];
+      }
 
+      value ??= this.getDefault(key);
+
+      return this.cache[key] = value;
+    });
+  }
+
+  public getCached<T extends keyof Storage>(key: T) {
+    const value = this.get(key);
+    if(value instanceof Promise) {
+      throw 'no property';
     }
 
-    if(this.cache[key] !== undefined) {
-      return this.cache[key];
-    }
-
-    if(value === undefined) {
-      const callback = this.defaults[key];
-      value = typeof(callback) === 'function' ? callback() : callback;
-    }
-
-    return this.cache[key] = value;
+    return value;
   }
 
   public async set<T extends keyof Storage>(key: T, value: Storage[T]) {
@@ -101,7 +116,7 @@ type PushStorage = {
   push_settings: Partial<ServicePushPingTaskPayload['settings']>
 };
 
-const getter = new SomethingGetter<typeof DATABASE_STATE, PushStorage>(DATABASE_STATE, 'session', {
+const defaults: PushStorage = {
   push_mute_until: 0,
   push_lang: {
     push_message_nopreview: 'You have a new message',
@@ -109,72 +124,59 @@ const getter = new SomethingGetter<typeof DATABASE_STATE, PushStorage>(DATABASE_
     push_action_settings: 'Settings'
   },
   push_settings: {}
-});
+};
+
+const getter = new SomethingGetter<typeof DATABASE_STATE, PushStorage>(DATABASE_STATE, 'session', defaults);
+
+// fill cache
+for(const i in defaults) {
+  getter.get(i as keyof PushStorage);
+}
 
 ctx.addEventListener('push', (event) => {
   const obj: PushNotificationObject = event.data.json();
-  log('push', obj);
+  log('push', {...obj});
 
-  let hasActiveWindows = false;
-  const checksPromise = Promise.all([
-    getter.get('push_mute_until'),
-    ctx.clients.matchAll({type: 'window'})
-  ]).then((result) => {
-    const [muteUntil, clientList] = result;
-
-    log('matched clients', clientList);
-    hasActiveWindows = clientList.length > 0;
-    if(hasActiveWindows) {
-      throw 'Supress notification because some instance is alive';
-    }
+  try {
+    const [muteUntil, settings, lang] = [
+      getter.getCached('push_mute_until'),
+      getter.getCached('push_settings'),
+      getter.getCached('push_lang')
+    ];
 
     const nowTime = Date.now();
-    if(userInvisibleIsSupported() &&
-        muteUntil &&
-        nowTime < muteUntil) {
-      throw `Supress notification because mute for ${Math.ceil((muteUntil - nowTime) / 60000)} min`;
+    if(
+      userInvisibleIsSupported() &&
+      muteUntil &&
+      nowTime < muteUntil
+    ) {
+      throw `supress notification because mute for ${Math.ceil((muteUntil - nowTime) / 60000)} min`;
     }
 
-    if(!obj.badge) {
-      throw 'No badge?';
-    }
-  });
-
-  checksPromise.catch((reason) => {
-    log(reason);
-  });
-
-  const notificationPromise = checksPromise.then(() => {
-    return Promise.all([getter.get('push_settings'), getter.get('push_lang')])
-  }).then((result) => {
-    return fireNotification(obj, result[0], result[1]);
-  });
-
-  const closePromise = notificationPromise.catch(() => {
-    log('Closing all notifications on push', hasActiveWindows);
-    if(userInvisibleIsSupported() || hasActiveWindows) {
-      return closeAllNotifications();
+    const hasActiveWindows = (Date.now() - lastPingTime) <= PING_PUSH_TIMEOUT && localNotificationsAvailable;
+    if(hasActiveWindows) {
+      throw 'supress notification because some instance is alive';
     }
 
-    return ctx.registration.showNotification('Telegram', {
-      tag: 'unknown_peer'
-    }).then(() => {
-      if(hasActiveWindows) {
-        return closeAllNotifications();
-      }
+    const notificationPromise = fireNotification(obj, settings, lang);
+    event.waitUntil(notificationPromise);
+  } catch(err) {
+    log(err);
 
-      setTimeout(() => closeAllNotifications(), hasActiveWindows ? 0 : 100);
-    }).catch((error) => {
-      log.error('Show notification error', error);
-    });
-  });
+    // const tag = 'fix';
+    // const notificationPromise = ctx.registration.showNotification('Telegram', {tag});
 
-  event.waitUntil(closePromise);
+    // notificationPromise.then(() => {
+    //   closeAllNotifications(tag);
+    // });
+
+    // event.waitUntil(notificationPromise);
+  }
 });
 
 ctx.addEventListener('notificationclick', (event) => {
   const notification = event.notification;
-  log('On notification click: ', notification.tag);
+  log('on notification click', notification);
   notification.close();
 
   const action = event.action as PushNotificationObject['action'];
@@ -194,7 +196,7 @@ ctx.addEventListener('notificationclick', (event) => {
   }).then((clientList) => {
     data.action = action;
     pendingNotification = data;
-    for(let i = 0; i < clientList.length; i++) {
+    for(let i = 0; i < clientList.length; ++i) {
       const client = clientList[i];
       if('focus' in client) {
         client.focus();
@@ -205,7 +207,7 @@ ctx.addEventListener('notificationclick', (event) => {
     }
 
     if(ctx.clients.openWindow) {
-      return getter.get('push_settings').then((settings) => {
+      return Promise.resolve(getter.get('push_settings')).then((settings) => {
         return ctx.clients.openWindow(settings.baseUrl || defaultBaseUrl);
       });
     }
@@ -236,16 +238,21 @@ function removeFromNotifications(notification: Notification) {
   notifications.delete(notification);
 }
 
-export function closeAllNotifications() {
+export function closeAllNotifications(tag?: string) {
   for(const notification of notifications) {
     try {
+      if(tag && notification.tag !== tag) {
+        continue;
+      }
+
       notification.close();
+      notifications.delete(notification);
     } catch(e) {}
   }
 
   let promise: Promise<void>;
   if('getNotifications' in ctx.registration) {
-    promise = ctx.registration.getNotifications({}).then((notifications) => {
+    promise = ctx.registration.getNotifications({tag}).then((notifications) => {
       for(let i = 0, len = notifications.length; i < len; ++i) {
         try {
           notifications[i].close();
@@ -258,8 +265,6 @@ export function closeAllNotifications() {
     promise = Promise.resolve();
   }
 
-  notifications.clear();
-
   return promise;
 }
 
@@ -268,7 +273,6 @@ function userInvisibleIsSupported() {
 }
 
 function fireNotification(obj: PushNotificationObject, settings: PushStorage['push_settings'], lang: PushStorage['push_lang']) {
-  const icon = 'assets/img/logo_filled_rounded.png';
   let title = obj.title || 'Telegram';
   let body = obj.description || '';
   let peerId: string;
@@ -286,13 +290,19 @@ function fireNotification(obj: PushNotificationObject, settings: PushStorage['pu
   obj.custom.peerId = '' + peerId;
   let tag = 'peer' + peerId;
 
-  if(settings && settings.nopreview) {
+  const messageKey = peerId + '_' + obj.custom.msg_id;
+  if(ignoreMessages.has(messageKey)) {
+    const error = 'ignoring push';
+    log.warn(error, obj);
+    ignoreMessages.delete(messageKey);
+    throw error;
+  }
+
+  if(settings?.nopreview) {
     title = 'Telegram';
     body = lang.push_message_nopreview;
     tag = 'unknown_peer';
   }
-
-  log('show notify', title, body, icon, obj);
 
   const actions: (Omit<NotificationAction, 'action'> & {action: PushNotificationObject['action']})[] = [{
     action: 'mute1d',
@@ -302,26 +312,29 @@ function fireNotification(obj: PushNotificationObject, settings: PushStorage['pu
     title: lang.push_action_settings || 'Settings'
   } */];
 
-  const notificationPromise = ctx.registration.showNotification(title, {
+  const notificationOptions: NotificationOptions = {
     body,
-    icon,
+    icon: NOTIFICATION_ICON_PATH,
     tag,
     data: obj,
-    actions
-  });
+    actions,
+    badge: NOTIFICATION_BADGE_PATH,
+    silent: obj.custom.silent === '1'
+  };
 
-  return notificationPromise.then((event) => {
-    // @ts-ignore
-    if(event?.notification) {
-      // @ts-ignore
-      pushToNotifications(event.notification);
-    }
-  }).catch((error) => {
+  log('show notify', title, body, obj, notificationOptions);
+
+  const notificationPromise = ctx.registration.showNotification(title, notificationOptions);
+
+  return notificationPromise.catch((error) => {
     log.error('Show notification promise', error);
   });
 }
 
 export function onPing(payload: ServicePushPingTaskPayload, source?: MessageEventSource) {
+  lastPingTime = Date.now();
+  localNotificationsAvailable = payload.localNotifications;
+
   if(pendingNotification && source) {
     serviceMessagePort.invokeVoid('pushClick', pendingNotification, source);
     pendingNotification = undefined;
@@ -335,3 +348,17 @@ export function onPing(payload: ServicePushPingTaskPayload, source?: MessageEven
     getter.set('push_settings', payload.settings);
   }
 }
+
+const ignoreMessages: Map<string, number> = new Map();
+export function onShownNotification(payload: string) {
+  ignoreMessages.set(payload, Date.now());
+}
+
+setInterval(() => {
+  const time = Date.now();
+  ignoreMessages.forEach((_time, key) => {
+    if((time - _time) > 30e3) {
+      ignoreMessages.delete(key);
+    }
+  });
+}, 30 * 60e3);

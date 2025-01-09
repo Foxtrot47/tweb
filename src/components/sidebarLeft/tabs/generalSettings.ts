@@ -4,28 +4,32 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {generateSection, SettingSection} from '..';
 import RangeSelector from '../../rangeSelector';
 import Button from '../../button';
 import CheckboxField from '../../checkboxField';
 import RadioField from '../../radioField';
 import rootScope from '../../../lib/rootScope';
-import {IS_APPLE} from '../../../environment/userAgent';
+import {IS_APPLE, IS_SAFARI} from '../../../environment/userAgent';
 import Row from '../../row';
 import AppBackgroundTab from './background';
-import {LangPackKey, _i18n} from '../../../lib/langPack';
+import I18n, {LangPackKey, _i18n, join} from '../../../lib/langPack';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
-import assumeType from '../../../helpers/assumeType';
-import {MessagesAllStickers, StickerSet} from '../../../layer';
-import {wrapStickerSetThumb, wrapStickerToRow} from '../../wrappers';
-import LazyLoadQueue from '../../lazyLoadQueue';
-import PopupStickers from '../../popups/stickers';
+import {BaseTheme} from '../../../layer';
 import eachMinute from '../../../helpers/eachMinute';
 import {SliderSuperTabEventable} from '../../sliderTab';
 import IS_GEOLOCATION_SUPPORTED from '../../../environment/geolocationSupport';
-import AppQuickReactionTab from './quickReaction';
-import wrapEmojiText from '../../../lib/richTextProcessor/wrapEmojiText';
-import {State} from '../../../config/state';
+import {DEFAULT_THEME, State} from '../../../config/state';
+import {generateSection} from '../../settingSection';
+import {ScrollableX} from '../../scrollable';
+import wrapStickerEmoji from '../../wrappers/stickerEmoji';
+import {Theme} from '../../../layer';
+import findUpClassName from '../../../helpers/dom/findUpClassName';
+import RLottiePlayer from '../../../lib/rlottie/rlottiePlayer';
+import themeController from '../../../helpers/themeController';
+import liteMode from '../../../helpers/liteMode';
+import AppPowerSavingTab from './powerSaving';
+import {toastNew} from '../../toast';
+import {joinDeepPath} from '../../../helpers/object/setDeepProperty';
 
 export class RangeSettingSelector {
   public container: HTMLDivElement;
@@ -86,36 +90,328 @@ export class RangeSettingSelector {
 }
 
 export default class AppGeneralSettingsTab extends SliderSuperTabEventable {
-  init() {
-    this.header.classList.add('with-border');
+  public static getInitArgs() {
+    return {
+      themes: rootScope.managers.appThemesManager.getThemes()
+    };
+  }
+
+  public init(p: ReturnType<typeof AppGeneralSettingsTab['getInitArgs']>) {
     this.container.classList.add('general-settings-container');
     this.setTitle('General');
 
     const section = generateSection.bind(null, this.scrollable);
+    const promises: Promise<any>[] = [];
 
     {
       const container = section('Settings');
 
       const range = new RangeSettingSelector('TextSize', 1, rootScope.settings.messagesTextSize, 12, 20);
       range.onChange = (value) => {
-        rootScope.managers.appStateManager.setByKey('settings.messagesTextSize', value);
+        rootScope.managers.appStateManager.setByKey(joinDeepPath('settings', 'messagesTextSize'), value);
       };
 
       const chatBackgroundButton = Button('btn-primary btn-transparent', {icon: 'image', text: 'ChatBackground'});
 
+      const initArgs = AppBackgroundTab.getInitArgs();
       attachClickEvent(chatBackgroundButton, () => {
-        this.slider.createTab(AppBackgroundTab).open();
+        this.slider.createTab(AppBackgroundTab).open(initArgs);
       });
+
+      const getLiteModeStatus = (): LangPackKey => rootScope.settings.liteMode.all ? 'Checkbox.Enabled' : 'Checkbox.Disabled';
+      const i = new I18n.IntlElement();
+
+      const onUpdate = () => {
+        i.compareAndUpdate({key: getLiteModeStatus()});
+        animationsCheckboxField.setValueSilently(liteMode.isAvailable('animations'));
+        animationsCheckboxField.toggleDisability(liteMode.isEnabled());
+      };
 
       const animationsCheckboxField = new CheckboxField({
         text: 'EnableAnimations',
         name: 'animations',
-        stateKey: 'settings.animationsEnabled',
-        withRipple: true,
+        stateKey: joinDeepPath('settings', 'liteMode', 'animations'),
+        stateValueReverse: true,
+        checked: false,
         listenerSetter: this.listenerSetter
       });
 
-      container.append(range.container, chatBackgroundButton, animationsCheckboxField.label);
+      const animationsRow = new Row({
+        checkboxField: animationsCheckboxField,
+        clickable: () => {
+          if(animationsCheckboxField.isDisabled()) {
+            toastNew({langPackKey: 'LiteMode.DisableAlert'});
+          }
+        },
+        listenerSetter: this.listenerSetter
+      });
+
+      const liteModeRow = new Row({
+        icon: 'animations',
+        titleLangKey: 'LiteMode.EnableText',
+        titleRightSecondary: i.element,
+        clickable: () => {
+          this.slider.createTab(AppPowerSavingTab).open();
+        },
+        listenerSetter: this.listenerSetter
+      });
+
+      onUpdate();
+
+      this.listenerSetter.add(rootScope)('settings_updated', onUpdate);
+
+      container.append(
+        range.container,
+        chatBackgroundButton,
+        animationsRow.container,
+        liteModeRow.container
+      );
+    }
+
+    {
+      const container = section('ColorTheme');
+
+      const scrollable = new ScrollableX(null);
+      const themesContainer = scrollable.container;
+      themesContainer.classList.add('themes-container');
+
+      type K = {
+        container: HTMLElement,
+        theme: Theme,
+        player?: RLottiePlayer,
+        wallPaperContainers?: {[key in BaseTheme['_']]?: HTMLElement}
+      };
+      const themesMap = new Map<HTMLElement, K>();
+      let currentTheme = themeController.getTheme();
+      let isNight = themeController.isNight();
+
+      const applyThemeOnItem = (item: K) => {
+        themeController.applyTheme(item.theme, item.container);
+
+        const previous = item.container.querySelector('.background-item');
+        previous?.remove();
+
+        const wallPaperContainer = item.wallPaperContainers[isNight ? 'baseThemeNight' : 'baseThemeClassic']
+        if(wallPaperContainer) {
+          item.container.prepend(wallPaperContainer);
+        }
+      };
+
+      let lastOnFrameNo: (frameNo: number) => void;
+
+      attachClickEvent(themesContainer, async(e) => {
+        const container = findUpClassName(e.target, 'theme-container');
+        if(!container) {
+          return;
+        }
+
+        const lastActive = themesContainer.querySelector('.active');
+        if(lastActive) {
+          lastActive.classList.remove('active');
+        }
+
+        const item = themesMap.get(container);
+        container.classList.add('active');
+
+        await themeController.applyNewTheme(item.theme);
+
+        lastOnFrameNo?.(-1);
+
+        if(item.player && liteMode.isAvailable('animations')) {
+          if(IS_SAFARI) {
+            if(item.player.paused) {
+              item.player.restart();
+            }
+          } else {
+            if(item.player.paused) {
+              item.player.stop(true);
+            }
+
+            item.player.el[0].style.transform = 'scale(2)';
+
+            const onFrameNo = lastOnFrameNo = (frameNo) => {
+              if(item.player.maxFrame === frameNo || frameNo === -1) {
+                item.player.el[0].style.transform = '';
+                item.player.removeEventListener('enterFrame', onFrameNo);
+
+                if(lastOnFrameNo === onFrameNo) {
+                  lastOnFrameNo = undefined;
+                }
+              }
+            };
+
+            setTimeout(() => {
+              if(lastOnFrameNo !== onFrameNo) {
+                return;
+              }
+
+              item.player.play();
+              item.player.addEventListener('enterFrame', onFrameNo);
+            }, 250);
+          }
+        }
+      }, {listenerSetter: this.listenerSetter});
+
+      const availableBaseThemes: Set<BaseTheme['_']> = new Set(['baseThemeClassic', 'baseThemeNight']);
+
+      const promise = p.themes.then(async(themes) => {
+        const defaultThemes = themes.filter((theme) => theme.pFlags.default/*  && theme.settings[0].message_colors.length === 1 */);
+        defaultThemes.unshift(DEFAULT_THEME);
+
+        const promises = defaultThemes.map(async(theme) => {
+          const container = document.createElement('div');
+          const k: K = {
+            container,
+            theme,
+            wallPaperContainers: {}
+          };
+
+          const results = theme.settings
+          .filter((themeSettings) => availableBaseThemes.has(themeSettings.base_theme._))
+          .map((themeSettings) => {
+            const wallPaper = themeSettings.wallpaper;
+            const result = AppBackgroundTab.addWallPaper(wallPaper);
+            k.wallPaperContainers[themeSettings.base_theme._] = result.container;
+            return result;
+          });
+
+          themesMap.set(container, k);
+
+          applyThemeOnItem(k);
+
+          if(theme.id === currentTheme.id) {
+            container.classList.add('active');
+          }
+
+          const emoticon = theme.emoticon;
+          const loadPromises: Promise<any>[] = [];
+          let emoticonContainer: HTMLElement;
+          if(emoticon) {
+            emoticonContainer = document.createElement('div');
+            emoticonContainer.classList.add('theme-emoticon');
+            const size = 28 * 1.75;
+            wrapStickerEmoji({
+              div: emoticonContainer,
+              width: size,
+              height: size,
+              emoji: theme.emoticon,
+              managers: this.managers,
+              loadPromises,
+              middleware: this.middlewareHelper.get(),
+              play: false
+            }).then(({render}) => render).then((player) => {
+              k.player = player as RLottiePlayer;
+            });
+          }
+
+          const bubble = document.createElement('div');
+          bubble.classList.add('theme-bubble');
+
+          const bubbleIn = bubble.cloneNode() as HTMLElement;
+
+          bubbleIn.classList.add('is-in');
+          bubble.classList.add('is-out');
+
+          loadPromises.push(...results.map((result) => result.loadPromise));
+
+          container.classList.add('theme-container');
+
+          await Promise.all(loadPromises);
+
+          if(emoticonContainer) {
+            container.append(emoticonContainer);
+          }
+
+          container.append(bubbleIn, bubble);
+
+          return container;
+        });
+
+        const containers = await Promise.all(promises);
+
+        scrollable.append(...containers);
+      });
+
+      promises.push(promise);
+
+      const form = document.createElement('form');
+      form.style.marginTop = '.5rem';
+
+      const name = 'theme';
+      const stateKey = joinDeepPath('settings', 'theme');
+
+      const dayRow = new Row({
+        radioField: new RadioField({
+          langKey: 'ThemeDay',
+          name,
+          value: 'day',
+          stateKey
+        })
+      });
+
+      const nightRow = new Row({
+        radioField: new RadioField({
+          langKey: 'ThemeNight',
+          name,
+          value: 'night',
+          stateKey
+        })
+      });
+
+      const systemRow = new Row({
+        radioField: new RadioField({
+          langKey: 'AutoNightSystemDefault',
+          name,
+          value: 'system',
+          stateKey
+        })
+      });
+
+      this.listenerSetter.add(rootScope)('settings_updated', ({key, value, settings}) => {
+        if(key === stateKey) {
+          rootScope.dispatchEvent('theme_change');
+        }
+      });
+
+      this.listenerSetter.add(rootScope)('theme_changed', () => {
+        currentTheme = themeController.getTheme();
+        const newIsNight = themeController.isNight();
+        if(isNight === newIsNight) {
+          return;
+        }
+
+        isNight = newIsNight;
+
+        const lastActive = themesContainer.querySelector('.active');
+        if(lastActive) {
+          lastActive.classList.remove('active');
+        }
+
+        let active: HTMLElement;
+        themesMap.forEach((item) => {
+          applyThemeOnItem(item);
+
+          if(item.theme.id === currentTheme.id) {
+            item.container.classList.add('active');
+            active = item.container;
+          }
+        });
+
+        if(active) {
+          scrollable.scrollIntoViewNew({
+            element: active,
+            position: 'center',
+            axis: 'x'
+          });
+        }
+      });
+
+      form.append(dayRow.container, nightRow.container, systemRow.container);
+
+      container.append(
+        themesContainer,
+        form
+      );
     }
 
     {
@@ -124,7 +420,7 @@ export default class AppGeneralSettingsTab extends SliderSuperTabEventable {
       const form = document.createElement('form');
 
       const name = 'send-shortcut';
-      const stateKey = 'settings.sendShortcut';
+      const stateKey = joinDeepPath('settings', 'sendShortcut');
 
       const enterRow = new Row({
         radioField: new RadioField({
@@ -156,7 +452,7 @@ export default class AppGeneralSettingsTab extends SliderSuperTabEventable {
       const form = document.createElement('form');
 
       const name = 'distance-unit';
-      const stateKey = 'settings.distanceUnit';
+      const stateKey = joinDeepPath('settings', 'distanceUnit');
 
       const kilometersRow = new Row({
         radioField: new RadioField({
@@ -186,7 +482,7 @@ export default class AppGeneralSettingsTab extends SliderSuperTabEventable {
       const form = document.createElement('form');
 
       const name = 'time-format';
-      const stateKey = 'settings.timeFormat';
+      const stateKey = joinDeepPath('settings', 'timeFormat');
 
       const formats: [State['settings']['timeFormat'], LangPackKey][] = [
         ['h12', 'General.TimeFormat.h12'],
@@ -225,138 +521,6 @@ export default class AppGeneralSettingsTab extends SliderSuperTabEventable {
       container.append(form);
     }
 
-    {
-      const container = section('Emoji');
-
-      const suggestCheckboxField = new CheckboxField({
-        text: 'GeneralSettings.EmojiPrediction',
-        name: 'suggest-emoji',
-        stateKey: 'settings.emoji.suggest',
-        withRipple: true,
-        listenerSetter: this.listenerSetter
-      });
-      const bigCheckboxField = new CheckboxField({
-        text: 'GeneralSettings.BigEmoji',
-        name: 'emoji-big',
-        stateKey: 'settings.emoji.big',
-        withRipple: true,
-        listenerSetter: this.listenerSetter
-      });
-
-      container.append(suggestCheckboxField.label, bigCheckboxField.label);
-    }
-
-    {
-      const section = new SettingSection({name: 'Telegram.InstalledStickerPacksController', caption: 'StickersBotInfo'});
-
-      const reactionsRow = new Row({
-        titleLangKey: 'DoubleTapSetting',
-        havePadding: true,
-        clickable: () => {
-          this.slider.createTab(AppQuickReactionTab).open();
-        },
-        listenerSetter: this.listenerSetter
-      });
-
-      const renderQuickReaction = () => {
-        Promise.resolve(this.managers.appReactionsManager.getQuickReaction()).then((reaction) => {
-          wrapStickerToRow({
-            row: reactionsRow,
-            doc: reaction.static_icon,
-            size: 'small'
-          });
-        });
-      };
-
-      renderQuickReaction();
-
-      this.listenerSetter.add(rootScope)('quick_reaction', renderQuickReaction);
-
-      const suggestCheckboxField = new CheckboxField({
-        text: 'Stickers.SuggestStickers',
-        name: 'suggest',
-        stateKey: 'settings.stickers.suggest',
-        withRipple: true,
-        listenerSetter: this.listenerSetter
-      });
-      const loopCheckboxField = new CheckboxField({
-        text: 'InstalledStickers.LoopAnimated',
-        name: 'loop',
-        stateKey: 'settings.stickers.loop',
-        withRipple: true,
-        listenerSetter: this.listenerSetter
-      });
-
-      const stickerSets: {[id: string]: Row} = {};
-
-      const stickersContent = section.generateContentElement();
-
-      const lazyLoadQueue = new LazyLoadQueue();
-      const renderStickerSet = (stickerSet: StickerSet.stickerSet, method: 'append' | 'prepend' = 'append') => {
-        const row = new Row({
-          title: wrapEmojiText(stickerSet.title),
-          subtitleLangKey: 'Stickers',
-          subtitleLangArgs: [stickerSet.count],
-          havePadding: true,
-          clickable: () => {
-            new PopupStickers({id: stickerSet.id, access_hash: stickerSet.access_hash}).show();
-          },
-          listenerSetter: this.listenerSetter
-        });
-
-        stickerSets[stickerSet.id] = row;
-
-        const div = document.createElement('div');
-        div.classList.add('row-media');
-
-        wrapStickerSetThumb({
-          set: stickerSet,
-          container: div,
-          group: 'GENERAL-SETTINGS',
-          lazyLoadQueue,
-          width: 48,
-          height: 48,
-          autoplay: true
-        });
-
-        row.container.append(div);
-
-        stickersContent[method](row.container);
-      };
-
-      this.managers.appStickersManager.getAllStickers().then((allStickers) => {
-        assumeType<MessagesAllStickers.messagesAllStickers>(allStickers);
-        for(const stickerSet of allStickers.sets) {
-          renderStickerSet(stickerSet);
-        }
-      });
-
-      this.listenerSetter.add(rootScope)('stickers_installed', (e) => {
-        const set: StickerSet.stickerSet = e;
-
-        if(!stickerSets[set.id]) {
-          renderStickerSet(set, 'prepend');
-        }
-      });
-
-      this.listenerSetter.add(rootScope)('stickers_deleted', (e) => {
-        const set: StickerSet.stickerSet = e;
-
-        if(stickerSets[set.id]) {
-          stickerSets[set.id].container.remove();
-          delete stickerSets[set.id];
-        }
-      });
-
-      section.content.append(reactionsRow.container, suggestCheckboxField.label, loopCheckboxField.label);
-      this.scrollable.append(section.container);
-    }
-  }
-
-  onOpen() {
-    if(this.init) {
-      this.init();
-      this.init = null;
-    }
+    return Promise.all(promises);
   }
 }

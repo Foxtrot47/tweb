@@ -4,20 +4,27 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {addCancelButton} from './popups';
-import PopupPeer, {PopupPeerOptions} from './popups/peer';
+import PopupElement, {addCancelButton} from './popups';
+import PopupPeer, {PopupPeerCheckboxOptions, PopupPeerOptions} from './popups/peer';
 
 // type PopupConfirmationOptions = Pick<PopupPeerOptions, 'titleLangKey'>;
 export type PopupConfirmationOptions = PopupPeerOptions & {
   button: PopupPeerOptions['buttons'][0],
-  checkbox?: PopupPeerOptions['checkboxes'][0]
+  checkbox?: PopupPeerOptions['checkboxes'][0],
+  inputField?: PopupPeerOptions['inputField']
 };
 
-export default function confirmationPopup(options: PopupConfirmationOptions) {
-  return new Promise<boolean | void>((resolve, reject) => {
+export default function confirmationPopup<T extends PopupConfirmationOptions>(
+  options: T
+): Promise<T['checkboxes'] extends PopupPeerCheckboxOptions[] ? Array<boolean> : (T['checkbox'] extends PopupPeerCheckboxOptions ? boolean : void)> {
+  return new Promise<any>((resolve, reject) => {
     const {button, checkbox} = options;
-    button.callback = (set) => {
-      resolve(set ? !!set.size : undefined);
+    button.callback = (e, set) => {
+      if(checkbox || !set) {
+        resolve(set ? !!set.size : undefined);
+      } else {
+        resolve(options.checkboxes.map((checkbox) => set.has(checkbox.text)));
+      }
     };
 
     const buttons = addCancelButton(options.buttons || [button]);
@@ -29,6 +36,11 @@ export default function confirmationPopup(options: PopupConfirmationOptions) {
     options.buttons = buttons;
     options.checkboxes ??= checkbox && [checkbox];
 
-    new PopupPeer('popup-confirmation', options).show();
+    const popup = PopupElement.createPopup(PopupPeer, 'popup-confirmation', options);
+    popup.addEventListener('closeAfterTimeout', () => {
+      reject();
+    });
+
+    popup.show();
   });
 }

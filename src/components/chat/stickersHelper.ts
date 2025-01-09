@@ -4,15 +4,14 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
+import type Chat from './chat';
 import ListenerSetter from '../../helpers/listenerSetter';
 import mediaSizes from '../../helpers/mediaSizes';
 import preloadAnimatedEmojiSticker from '../../helpers/preloadAnimatedEmojiSticker';
 import {MyDocument} from '../../lib/appManagers/appDocsManager';
-import {CHAT_ANIMATION_GROUP} from '../../lib/appManagers/appImManager';
 import {AppManagers} from '../../lib/appManagers/managers';
 import rootScope from '../../lib/rootScope';
-import {EmoticonsDropdown} from '../emoticonsDropdown';
-import {SuperStickerRenderer} from '../emoticonsDropdown/tabs/stickers';
+import SuperStickerRenderer from '../emoticonsDropdown/tabs/SuperStickerRenderer';
 import LazyLoadQueue from '../lazyLoadQueue';
 import Scrollable from '../scrollable';
 import attachStickerViewerListeners from '../stickerViewer';
@@ -29,6 +28,7 @@ export default class StickersHelper extends AutocompleteHelper {
   constructor(
     appendTo: HTMLElement,
     controller: AutocompleteHelperController,
+    private chat: Chat,
     private managers: AppManagers
   ) {
     super({
@@ -36,7 +36,7 @@ export default class StickersHelper extends AutocompleteHelper {
       controller,
       listType: 'xy',
       onSelect: async(target) => {
-        return !(await EmoticonsDropdown.onMediaClick({target}, true));
+        return !(await this.chat.input.emoticonsDropdown.onMediaClick({target}, true));
       },
       waitForKey: ['ArrowUp', 'ArrowDown']
     });
@@ -45,7 +45,7 @@ export default class StickersHelper extends AutocompleteHelper {
 
     this.addEventListener('visible', () => {
       setTimeout(() => { // it is not rendered yet
-        this.scrollable.container.scrollTop = 0;
+        this.scrollable.scrollPosition = 0;
       }, 0);
 
       rootScope.dispatchEvent('choosing_sticker', true);
@@ -67,13 +67,14 @@ export default class StickersHelper extends AutocompleteHelper {
   public checkEmoticon(emoticon: string) {
     const middleware = this.controller.getMiddleware();
 
-    if(this.lazyLoadQueue) {
-      this.lazyLoadQueue.clear();
-    }
+    this.lazyLoadQueue?.clear();
 
     preloadAnimatedEmojiSticker(emoticon);
-    this.managers.appStickersManager.getStickersByEmoticon(emoticon)
-    .then((stickers) => {
+    this.managers.appStickersManager.getStickersByEmoticon({
+      emoticon,
+      includeOurStickers: true,
+      includeServerStickers: rootScope.settings.stickers.suggest === 'all'
+    }).then((stickers) => {
       if(!middleware()) {
         return;
       }
@@ -97,6 +98,10 @@ export default class StickersHelper extends AutocompleteHelper {
 
           (Promise.all(promises) as Promise<any>).finally(resolve);
         });
+
+        middleware.onClean(() => {
+          this.superStickerRenderer.clear();
+        });
       } else {
         ready = Promise.resolve();
       }
@@ -119,12 +124,12 @@ export default class StickersHelper extends AutocompleteHelper {
         this.onChangeScreen();
 
         this.toggle(!stickers.length);
-        this.scrollable.scrollTop = 0;
+        this.scrollable.scrollPosition = 0;
       });
     });
   }
 
-  protected init() {
+  public init() {
     this.list = document.createElement('div');
     this.list.classList.add('stickers-helper-stickers', 'super-stickers');
 
@@ -132,6 +137,10 @@ export default class StickersHelper extends AutocompleteHelper {
 
     this.scrollable = new Scrollable(this.container);
     this.lazyLoadQueue = new LazyLoadQueue();
-    this.superStickerRenderer = new SuperStickerRenderer(this.lazyLoadQueue, CHAT_ANIMATION_GROUP, this.managers);
+    this.superStickerRenderer = new SuperStickerRenderer({
+      regularLazyLoadQueue: this.lazyLoadQueue,
+      group: this.chat.animationGroup,
+      managers: this.managers
+    });
   }
 }

@@ -4,7 +4,7 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import animationIntersector, {AnimationItemGroup} from '../../components/animationIntersector';
+import animationIntersector from '../../components/animationIntersector';
 import {MOUNT_CLASS_TO} from '../../config/debug';
 import pause from '../../helpers/schedulers/pause';
 import {logger, LogTypes} from '../logger';
@@ -14,18 +14,24 @@ import blobConstruct from '../../helpers/blob/blobConstruct';
 import apiManagerProxy from '../mtproto/mtprotoworker';
 import IS_WEB_ASSEMBLY_SUPPORTED from '../../environment/webAssemblySupport';
 import makeError from '../../helpers/makeError';
+import App from '../../config/app';
+import rootScope from '../rootScope';
+import toArray from '../../helpers/array/toArray';
 
 export type LottieAssetName = 'EmptyFolder' | 'Folders_1' | 'Folders_2' |
   'TwoFactorSetupMonkeyClose' | 'TwoFactorSetupMonkeyCloseAndPeek' |
   'TwoFactorSetupMonkeyCloseAndPeekToIdle' | 'TwoFactorSetupMonkeyIdle' |
   'TwoFactorSetupMonkeyPeek' | 'TwoFactorSetupMonkeyTracking' |
-  'voice_outlined2' | 'voip_filled' | 'voice_mini';
+  'voice_outlined2' | 'voip_filled' | 'voice_mini' | 'jolly_roger' |
+  'Gift3' | 'Gift6' | 'Gift12' | 'Folders_Shared' | 'UtyanSearch' |
+  'UtyanDiscussion' | 'UtyanLinks' | 'UtyanStories' | 'ReactionGeneric' |
+  'StatsEmoji' | 'Congratulations' | 'large_lastseen' | 'large_readtime';
 
 export class LottieLoader {
-  private loadPromise: Promise<void> = !IS_WEB_ASSEMBLY_SUPPORTED ? Promise.reject() : undefined;
+  private loadPromise: Promise<void> = !IS_WEB_ASSEMBLY_SUPPORTED ? Promise.reject(makeError('NO_WASM')) : undefined;
   private loaded = false;
 
-  private workersLimit = 4;
+  private workersLimit = App.threads;
   private players: {[reqId: number]: RLottiePlayer} = {};
   private playersByCacheName: {[cacheName: string]: Set<RLottiePlayer>} = {};
 
@@ -33,6 +39,14 @@ export class LottieLoader {
   private curWorkerNum = 0;
 
   private log = logger('LOTTIE', LogTypes.Error);
+
+  constructor() {
+    rootScope.addEventListener('theme_changed', () => {
+      for(const reqId in this.players) {
+        this.players[reqId].applyColorForAllContexts();
+      }
+    });
+  }
 
   public getAnimation(element: HTMLElement) {
     for(const i in this.players) {
@@ -44,14 +58,6 @@ export class LottieLoader {
     return null;
   }
 
-  public setLoop(loop: boolean) {
-    for(const i in this.players) {
-      const player = this.players[i];
-      player.loop = loop;
-      player.autoplay = player._autoplay;
-    }
-  }
-
   public loadLottieWorkers() {
     if(this.loadPromise) {
       return this.loadPromise;
@@ -60,7 +66,7 @@ export class LottieLoader {
     return this.loadPromise = new Promise((resolve, reject) => {
       let remain = this.workersLimit;
       for(let i = 0; i < this.workersLimit; ++i) {
-        const worker = new Worker(new URL('./rlottie.worker.ts', import.meta.url));
+        const worker = new Worker(new URL('./rlottie.worker.ts', import.meta.url), {type: 'module'});
         const queryableWorker = this.workers[i] = new QueryableWorker(worker);
 
         queryableWorker.addEventListener('ready', () => {
@@ -86,36 +92,56 @@ export class LottieLoader {
     });
   }
 
-  public loadAnimationAsAsset(params: Omit<RLottieOptions, 'animationData' | 'name'>, name: LottieAssetName) {
-    (params as RLottieOptions).name = name;
-    return this.loadAnimationFromURL(params, 'assets/tgs/' + name + '.json');
+  public makeAssetUrl(name: LottieAssetName) {
+    return 'assets/tgs/' + name + '.json';
   }
 
-  public loadAnimationFromURL(params: Omit<RLottieOptions, 'animationData'>, url: string): Promise<RLottiePlayer> {
+  public loadAnimationAsAsset(params: Omit<RLottieOptions, 'animationData' | 'name'>, name: LottieAssetName) {
+    // (params as RLottieOptions).name = name;
+    return this.loadAnimationFromURL(params, this.makeAssetUrl(name));
+  }
+
+  public loadAnimationDataFromURL(url: string, method: 'json'): Promise<any>;
+  public loadAnimationDataFromURL(url: string, method?: 'blob'): Promise<Blob>;
+  public loadAnimationDataFromURL(url: string, method: 'json' | 'blob' = 'blob'): Promise<Blob | any> {
     if(!IS_WEB_ASSEMBLY_SUPPORTED) {
       return this.loadPromise as any;
     }
 
-    if(!this.loaded) {
-      this.loadLottieWorkers();
-    }
+    this.loadLottieWorkers();
 
     return fetch(url)
     .then((res) => {
       if(!res.headers || res.headers.get('content-type') === 'application/octet-stream') {
-        return res.arrayBuffer().then((data) => apiManagerProxy.invokeCrypto('gzipUncompress', data)).then((arr) => blobConstruct(arr as Uint8Array, ''))
+        return res.arrayBuffer()
+        .then((data) => apiManagerProxy.invokeCrypto('gzipUncompress', data))
+        .then((arr) => blobConstruct(arr as Uint8Array, ''));
       } else {
-        return res.blob();
+        return res[method]();
       }
-    })
+    });
     /* .then((str) => {
       return new Promise<string>((resolve) => setTimeout(() => resolve(str), 2e3));
     }) */
-    .then((blob) => {
-      const newParams = Object.assign(params, {animationData: blob, needUpscale: true});
-      if(!newParams.name) newParams.name = url;
-      return this.loadAnimationWorker(newParams);
+  }
+
+  public loadAnimationFromURLManually(name: LottieAssetName) {
+    const url = this.makeAssetUrl(name);
+    return this.loadAnimationDataFromURL(url).then((blob) => {
+      return (params: Omit<RLottieOptions, 'animationData'>) => this.loadAnimationFromURLNext(blob, params, url);
     });
+  }
+
+  public loadAnimationFromURL(params: Omit<RLottieOptions, 'animationData'>, url: string) {
+    return this.loadAnimationDataFromURL(url).then((blob) => {
+      return this.loadAnimationFromURLNext(blob, params, url);
+    });
+  }
+
+  public loadAnimationFromURLNext(blob: Blob, params: Omit<RLottieOptions, 'animationData'>, url: string) {
+    const newParams = Object.assign(params, {animationData: blob, needUpscale: true});
+    newParams.name ||= url;
+    return this.loadAnimationWorker(newParams);
   }
 
   public waitForFirstFrame(player: RLottiePlayer) {
@@ -132,11 +158,7 @@ export class LottieLoader {
     ]).then(() => player);
   }
 
-  public async loadAnimationWorker(
-    params: RLottieOptions,
-    group: AnimationItemGroup = params.group || '',
-    middleware?: () => boolean
-  ): Promise<RLottiePlayer> {
+  public async loadAnimationWorker(params: RLottieOptions): Promise<RLottiePlayer> {
     if(!IS_WEB_ASSEMBLY_SUPPORTED) {
       return this.loadPromise as any;
     }
@@ -145,6 +167,7 @@ export class LottieLoader {
       await this.loadLottieWorkers();
     }
 
+    const {middleware, group = ''} = params;
     if(middleware && !middleware()) {
       throw makeError('MIDDLEWARE');
     }
@@ -157,7 +180,7 @@ export class LottieLoader {
       }
     }
 
-    const containers = Array.isArray(params.container) ? params.container : [params.container];
+    const containers = toArray(params.container);
     if(!params.width || !params.height) {
       params.width = parseInt(containers[0].style.width);
       params.height = parseInt(containers[0].style.height);
@@ -171,8 +194,20 @@ export class LottieLoader {
 
     const player = this.initPlayer(containers, params);
 
-    if(group !== 'none') {
-      animationIntersector.addAnimation(player, group);
+    animationIntersector.addAnimation({
+      animation: player,
+      group,
+      observeElement: player.el[0],
+      controlled: middleware,
+      liteModeKey: params.liteModeKey,
+      type: 'lottie'
+    });
+
+    if(!params.sync) {
+      // * have to use onClean here, SuperStickerRenderer relies on it
+      middleware?.onClean(() => {
+        player.remove();
+      });
     }
 
     return player;
@@ -212,7 +247,7 @@ export class LottieLoader {
     // ! will need refactoring later, this is not the best way to remove the animation
     const animations = animationIntersector.getAnimations(player.el[0]);
     animations.forEach((animation) => {
-      animationIntersector.checkAnimation(animation, true, true);
+      animationIntersector.removeAnimation(animation);
     });
   };
 

@@ -5,7 +5,6 @@
  */
 
 import type {MyDocument} from '../lib/appManagers/appDocsManager';
-import {wrapPhoto} from './wrappers';
 import ProgressivePreloader from './preloader';
 import appMediaPlaybackController, {MediaItem, MediaSearchContext} from './appMediaPlaybackController';
 import {DocumentAttribute, Message} from '../layer';
@@ -36,6 +35,14 @@ import wrapSenderToPeer from './wrappers/senderToPeer';
 import wrapSentTime from './wrappers/sentTime';
 import getMediaFromMessage from '../lib/appManagers/utils/messages/getMediaFromMessage';
 import appDownloadManager from '../lib/appManagers/appDownloadManager';
+import wrapPhoto from './wrappers/photo';
+import {doubleRaf} from '../helpers/schedulers';
+import safePlay from '../helpers/dom/safePlay';
+import {_tgico} from '../helpers/tgico';
+import Icon from './icon';
+import setCurrentTime from '../helpers/dom/setCurrentTime';
+
+const UNMOUNT_PRELOADER = true;
 
 rootScope.addEventListener('messages_media_read', ({mids, peerId}) => {
   mids.forEach((mid) => {
@@ -72,39 +79,21 @@ export function decodeWaveform(waveform: Uint8Array | number[]) {
     result = new Uint8Array([]);
   }
 
-  /* var byteIndex = (valueCount - 1) / 8 | 0;
-  var bitShift = (valueCount - 1) % 8;
-  if(byteIndex === waveform.length - 1) {
-    var value = waveform[byteIndex];
-  } else {
-    var value = dataView.getUint16(byteIndex, true);
-  }
-  console.log('decoded waveform, setting last value:', value, byteIndex, bitShift);
-  result[valueCount - 1] = (value >> bitShift) & 0b00011111; */
   return result;
 }
 
 function createWaveformBars(waveform: Uint8Array, duration: number) {
   const barWidth = 2;
-  const barMargin = 2;      // mediaSizes.isMobile ? 2 : 1;
-  const barHeightMin = 4;   // mediaSizes.isMobile ? 3 : 2;
-  const barHeightMax = mediaSizes.isMobile ? 16 : 23;
-  // const availW = 150;       //mediaSizes.isMobile ? 152 : 190;
+  const barMargin = 2;
+  const barHeightMin = 4;
+  const barHeightMax = mediaSizes.isMobile && false ? 16 : 23;
 
   const minW = mediaSizes.isMobile ? 152 : 190;
   const maxW = mediaSizes.isMobile ? 190 : 256;
-  const availW = clamp(duration / 60 * maxW, minW, maxW); // mediaSizes.isMobile ? 152 : 224;
-
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.classList.add('audio-waveform-bars');
-  svg.setAttributeNS(null, 'width', '' + availW);
-  svg.setAttributeNS(null, 'height', '' + barHeightMax);
-  svg.setAttributeNS(null, 'viewBox', `0 0 ${availW} ${barHeightMax}`);
-
-  // console.log('decoded waveform:', waveform);
+  const availW = clamp(duration / 60 * maxW, minW, maxW);
 
   const normValue = Math.max(...waveform);
-  const wfSize = waveform.length ? waveform.length : 100;
+  const wfSize = waveform.length;
   const barCount = Math.min((availW / (barWidth + barMargin)) | 0, wfSize);
 
   let maxValue = 0;
@@ -121,9 +110,7 @@ function createWaveformBars(waveform: Uint8Array, duration: number) {
 
       const bar_value = Math.max(((maxValue * maxDelta) + ((normValue + 1) / 2)) / (normValue + 1), barHeightMin);
 
-      const h = `
-      <rect x="${barX}" y="${barHeightMax - bar_value}" width="${barWidth}" height="${bar_value}" rx="1" ry="1"></rect>
-      `;
+      const h = `<rect class="audio-waveform-bar" x="${barX}" y="${barHeightMax - bar_value}" width="${barWidth}" height="${bar_value}" rx="1" ry="1"></rect>`;
       html += h;
 
       barX += barWidth + barMargin;
@@ -140,11 +127,24 @@ function createWaveformBars(waveform: Uint8Array, duration: number) {
     }
   }
 
-  const container = document.createElement('div');
-  container.classList.add('audio-waveform');
-  container.append(svg);
+  let container: HTMLElement, svg: SVGSVGElement;
 
-  svg.insertAdjacentHTML('beforeend', html);
+  if(!html) {
+
+  } else {
+    container = document.createElement('div');
+    container.classList.add('audio-waveform');
+
+    svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.classList.add('audio-waveform-bars');
+    svg.setAttributeNS(null, 'width', '' + availW);
+    svg.setAttributeNS(null, 'height', '' + barHeightMax);
+    svg.setAttributeNS(null, 'viewBox', `0 0 ${availW} ${barHeightMax}`);
+    svg.insertAdjacentHTML('beforeend', html);
+
+    container.append(svg);
+  }
+
   return {svg, container, availW};
 }
 
@@ -163,19 +163,77 @@ async function wrapVoiceMessage(audioEl: AudioElement) {
 
   const {svg, container: svgContainer, availW} = createWaveformBars(waveform, doc.duration);
 
-  const fakeSvgContainer = svgContainer.cloneNode(true) as HTMLElement;
-  fakeSvgContainer.classList.add('audio-waveform-fake');
-  svgContainer.classList.add('audio-waveform-background');
+  let fakeSvgContainer: HTMLElement;
+  if(svgContainer) {
+    fakeSvgContainer = svgContainer.cloneNode(true) as HTMLElement;
+    fakeSvgContainer.classList.add('audio-waveform-fake');
+    svgContainer.classList.add('audio-waveform-background');
+  }
 
   const waveformContainer = document.createElement('div');
   waveformContainer.classList.add('audio-waveform-container');
-  waveformContainer.append(svgContainer, fakeSvgContainer);
+
+  if(svgContainer) {
+    waveformContainer.append(svgContainer, fakeSvgContainer);
+  }
 
   const timeDiv = document.createElement('div');
   timeDiv.classList.add('audio-time');
   audioEl.append(waveformContainer, timeDiv);
 
-  let progress = svg as any as HTMLElement;
+  if(audioEl.transcriptionState !== undefined) {
+    audioEl.classList.add('can-transcribe');
+    const speechRecognitionDiv = document.createElement('div');
+    speechRecognitionDiv.classList.add('audio-to-text-button');
+    const speechRecognitionIcon = Icon('transcribe');
+    const speechRecognitionLoader = document.createElement('div');
+    speechRecognitionLoader.classList.add('loader');
+    speechRecognitionLoader.innerHTML = '<svg class="audio-transcribe-outline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 24"><rect class="audio-transcribe-outline-rect" fill="transparent" stroke-width="3" stroke-linejoin="round" rx="6" ry="6" stroke="var(--message-primary-color)" stroke-dashoffset="1" stroke-dasharray="32,68" width="32" height="24"></rect></svg>'
+    speechRecognitionDiv.append(speechRecognitionIcon);
+
+    speechRecognitionDiv.onclick = () => {
+      const speechTextDiv = (findUpClassName(audioEl, 'document-wrapper') || findUpClassName(audioEl, 'quote-text')).querySelector<HTMLElement>('.audio-transcribed-text');
+      if(audioEl.transcriptionState === 0) {
+        if(speechTextDiv) {
+          speechTextDiv.classList.remove('hide');
+          speechRecognitionIcon.classList.remove(_tgico('transcribe'));
+          speechRecognitionIcon.classList.add(_tgico('up'));
+          // TODO: State to enum
+          audioEl.transcriptionState = 2;
+        } else {
+          const message = audioEl.message;
+          if(message.pFlags.is_outgoing) {
+            return;
+          }
+
+          audioEl.transcriptionState = 1;
+          !speechRecognitionLoader.parentElement && speechRecognitionDiv.append(speechRecognitionLoader);
+          doubleRaf().then(() => {
+            if(audioEl.transcriptionState === 1) {
+              speechRecognitionLoader.classList.add('active');
+            }
+          });
+
+          audioEl.managers.appMessagesManager.transcribeAudio(message).catch(noop);
+        }
+      } else if(audioEl.transcriptionState === 2) {
+        // Hide transcription
+        speechTextDiv.classList.add('hide');
+        speechRecognitionIcon.classList.remove(_tgico('up'));
+        speechRecognitionIcon.classList.add(_tgico('transcribe'));
+        audioEl.transcriptionState = 0;
+      }
+    };
+
+    audioEl.append(speechRecognitionDiv);
+  }
+
+  let progress = svg as any as HTMLElement, progressLine: MediaProgressLine;
+  if(!progress) {
+    progressLine = new MediaProgressLine();
+
+    waveformContainer.append(progressLine.container);
+  }
 
   const onLoad = () => {
     let audio = audioEl.audio;
@@ -189,7 +247,9 @@ async function wrapVoiceMessage(audioEl: AudioElement) {
     };
 
     const onTimeUpdate = () => {
-      fakeSvgContainer.style.width = (audio.currentTime / audio.duration * 100) + '%';
+      if(fakeSvgContainer) {
+        fakeSvgContainer.style.width = (audio.currentTime / audio.duration * 100) + '%';
+      }
     };
 
     if(!audio.paused || (audio.currentTime > 0 && audio.currentTime !== audio.duration)) {
@@ -201,15 +261,15 @@ async function wrapVoiceMessage(audioEl: AudioElement) {
     audioEl.addAudioListener('ended', throttledTimeUpdate);
     audioEl.addAudioListener('play', setAnimation);
 
-    audioEl.readyPromise.then(() => {
+    progress && audioEl.readyPromise.then(() => {
       let mousedown = false, mousemove = false;
       progress.addEventListener('mouseleave', (e) => {
         if(mousedown) {
-          audio.play();
+          audioEl.togglePlay(undefined, true);
           mousedown = false;
         }
         mousemove = false;
-      })
+      });
       progress.addEventListener('mousemove', (e) => {
         mousemove = true;
         if(mousedown) scrub(e);
@@ -218,7 +278,7 @@ async function wrapVoiceMessage(audioEl: AudioElement) {
         e.preventDefault();
         if(e.button !== 0) return;
         if(!audio.paused) {
-          audio.pause();
+          audioEl.togglePlay(undefined, false);
         }
 
         scrub(e);
@@ -226,7 +286,7 @@ async function wrapVoiceMessage(audioEl: AudioElement) {
       });
       progress.addEventListener('mouseup', (e) => {
         if(mousemove && mousedown) {
-          audio.play();
+          audioEl.togglePlay(undefined, true);
           mousedown = false;
         }
       });
@@ -245,12 +305,18 @@ async function wrapVoiceMessage(audioEl: AudioElement) {
         }
 
         const scrubTime = offsetX / availW /* width */ * audio.duration;
-        audio.currentTime = scrubTime;
+        setCurrentTime(audio, scrubTime);
       }
     }, noop);
 
+    !progress && progressLine.setMedia({
+      media: audio,
+      streamable: doc.supportsStreaming,
+      duration: doc.duration
+    });
+
     return () => {
-      progress.remove();
+      progress?.remove();
       progress = null;
       audio = null;
     };
@@ -287,7 +353,7 @@ async function wrapAudio(audioEl: AudioElement) {
       parts.push(await wrapSenderToPeer(message));
     }
 
-    descriptionEl.append(...joinElementsWith(parts, ' • '));
+    descriptionEl.append(' • ', ...joinElementsWith(parts, ' • '));
   }
 
   const html = `
@@ -301,7 +367,9 @@ async function wrapAudio(audioEl: AudioElement) {
 
   const middleEllipsisEl = new MiddleEllipsisElement();
   middleEllipsisEl.dataset.fontWeight = audioEl.dataset.fontWeight;
+  middleEllipsisEl.dataset.fontSize = audioEl.dataset.fontSize;
   middleEllipsisEl.dataset.sizeType = audioEl.dataset.sizeType;
+  (middleEllipsisEl as any).getSize = (audioEl as any).getSize;
   if(isVoice) {
     middleEllipsisEl.append(await wrapSenderToPeer(message));
   } else {
@@ -320,7 +388,12 @@ async function wrapAudio(audioEl: AudioElement) {
   const onLoad = () => {
     let launched = false;
 
-    let progressLine = new MediaProgressLine(audioEl.audio, doc.supportsStreaming);
+    let progressLine = new MediaProgressLine();
+    progressLine.setMedia({
+      media: audioEl.audio,
+      streamable: doc.supportsStreaming,
+      duration: doc.duration
+    });
 
     audioEl.addAudioListener('ended', () => {
       audioEl.classList.remove('audio-show-progress');
@@ -421,11 +494,14 @@ export default class AudioElement extends HTMLElement {
   public lazyLoadQueue: LazyLoadQueue;
   public loadPromises: Promise<any>[];
   public managers: AppManagers;
+  public transcriptionState: number;
+  public uploadingFileName: string;
 
   private listenerSetter = new ListenerSetter();
   private onTypeDisconnect: () => void;
   public onLoad: (autoload?: boolean) => void;
   public readyPromise: CancellablePromise<void>;
+  public load: (shouldPlay: boolean, controlledAutoplay?: boolean) => void;
 
   public async render() {
     this.classList.add('audio');
@@ -438,9 +514,12 @@ export default class AudioElement extends HTMLElement {
     const isRealVoice = doc.type === 'voice';
     const isVoice = !this.voiceAsMusic && isRealVoice;
     const isOutgoing = this.message.pFlags.is_outgoing;
-    const uploadingFileName = this.message?.uploadingFileName;
+    const uploadingFileName = this.uploadingFileName ?? this.message?.uploadingFileName?.[0];
 
-    const durationStr = toHHMMSS(doc.duration | 0);
+    const getDurationStr = () => {
+      const duration = this.audio && this.audio.readyState >= this.audio.HAVE_CURRENT_DATA ? this.audio.duration : doc.duration;
+      return toHHMMSS(duration | 0);
+    };
 
     this.innerHTML = `
     <div class="audio-toggle audio-ico">
@@ -468,7 +547,7 @@ export default class AudioElement extends HTMLElement {
     const onTypeLoad = await (isVoice ? wrapVoiceMessage(this) : wrapAudio(this));
 
     const audioTimeDiv = this.querySelector('.audio-time') as HTMLDivElement;
-    audioTimeDiv.innerHTML = durationStr;
+    audioTimeDiv.textContent = getDurationStr();
 
     const onLoad = this.onLoad = (autoload: boolean) => {
       this.onLoad = undefined;
@@ -483,7 +562,7 @@ export default class AudioElement extends HTMLElement {
 
       this.onTypeDisconnect = onTypeLoad();
 
-      const getTimeStr = () => toHHMMSS(audio.currentTime | 0) + (isVoice ? (' / ' + durationStr) : '');
+      const getTimeStr = () => toHHMMSS(audio.currentTime | 0) + (isVoice ? (' / ' + getDurationStr()) : '');
 
       const onPlay = () => {
         audioTimeDiv.innerText = getTimeStr();
@@ -494,31 +573,16 @@ export default class AudioElement extends HTMLElement {
         onPlay();
       }
 
-      const togglePlay = (e?: Event, paused = audio.paused) => {
-        e && cancelEvent(e);
-
-        if(paused) {
-          const hadSearchContext = !!this.searchContext;
-          if(appMediaPlaybackController.setSearchContext(this.searchContext || {
-            peerId: NULL_PEER_ID,
-            inputFilter: {_: 'inputMessagesFilterEmpty'},
-            useSearch: false
-          })) {
-            const [prev, next] = !hadSearchContext ? [] : findMediaTargets(this, this.message.mid/* , this.searchContext.useSearch */);
-            appMediaPlaybackController.setTargets({peerId: this.message.peerId, mid: this.message.mid}, prev, next);
-          }
-
-          audio.play().catch(() => {});
-        } else {
-          audio.pause();
-        }
+      const onToggleClick = (e: MouseEvent) => {
+        this.togglePlay(e);
       };
 
-      attachClickEvent(toggle, (e) => togglePlay(e), {listenerSetter: this.listenerSetter});
+      toggle.addEventListener('click', onToggleClick);
+      // attachClickEvent(toggle, onToggleClick, {listenerSetter: this.listenerSetter});
 
       this.addAudioListener('ended', () => {
         toggle.classList.remove('playing');
-        audioTimeDiv.innerText = durationStr;
+        audioTimeDiv.innerText = getDurationStr();
       });
 
       this.addAudioListener('timeupdate', () => {
@@ -531,8 +595,6 @@ export default class AudioElement extends HTMLElement {
       });
 
       this.addAudioListener('play', onPlay);
-
-      return togglePlay;
     };
 
     if(doc.thumbs?.length) {
@@ -561,24 +623,16 @@ export default class AudioElement extends HTMLElement {
       const autoDownload = doc.type !== 'audio'/*  || !this.noAutoDownload */;
       onLoad(autoDownload);
 
-      const r = (shouldPlay: boolean) => {
+      const r = this.load = (shouldPlay: boolean, controlledAutoplay?: boolean) => {
+        this.load = undefined;
+
         if(this.audio.src) {
           return;
         }
 
         appMediaPlaybackController.resolveWaitingForLoadMedia(this.message.peerId, this.message.mid, this.message.pFlags.is_scheduled);
 
-        const onDownloadInit = () => {
-          if(shouldPlay) {
-            appMediaPlaybackController.willBePlayed(this.audio); // prepare for loading audio
-
-            if(IS_SAFARI && !this.audio.autoplay) {
-              this.audio.autoplay = true;
-            }
-          }
-        };
-
-        onDownloadInit();
+        this.onDownloadInit(shouldPlay);
 
         if(!preloader) {
           if(doc.supportsStreaming) {
@@ -605,7 +659,7 @@ export default class AudioElement extends HTMLElement {
                 deferred.cancel();
               }, {once: true}) as any;
 
-              onDownloadInit();
+              this.onDownloadInit(shouldPlay);
             };
 
             /* if(!this.audio.paused) {
@@ -615,7 +669,7 @@ export default class AudioElement extends HTMLElement {
             const playListener: any = this.addAudioListener('play', onPlay);
             this.readyPromise.then(() => {
               this.listenerSetter.remove(playListener);
-              this.listenerSetter.remove(pauseListener);
+              pauseListener && this.listenerSetter.remove(pauseListener);
             });
           } else {
             preloader = constructDownloadPreloader();
@@ -625,7 +679,7 @@ export default class AudioElement extends HTMLElement {
             }
 
             const load = () => {
-              onDownloadInit();
+              this.onDownloadInit(shouldPlay);
 
               const download = appDownloadManager.downloadMediaURL({media: doc});
 
@@ -653,16 +707,18 @@ export default class AudioElement extends HTMLElement {
         this.classList.add('downloading');
 
         this.readyPromise.then(() => {
-          this.classList.remove('downloading');
-          downloadDiv.classList.add('downloaded');
-          setTimeout(() => {
-            downloadDiv.remove();
-          }, 200);
+          if(UNMOUNT_PRELOADER) {
+            this.classList.remove('downloading');
+            downloadDiv.classList.add('downloaded');
+            setTimeout(() => {
+              downloadDiv.remove();
+            }, 200);
+          }
 
           // setTimeout(() => {
           // release loaded audio
-          if(appMediaPlaybackController.willBePlayedMedia === this.audio) {
-            this.audio.play();
+          if(!controlledAutoplay && appMediaPlaybackController.willBePlayedMedia === this.audio) {
+            safePlay(this.audio);
             appMediaPlaybackController.willBePlayed(undefined);
           }
           // }, 10e3);
@@ -675,16 +731,75 @@ export default class AudioElement extends HTMLElement {
         } else {
           attachClickEvent(toggle, () => {
             r(true);
-          }, {once: true, capture: true, passive: false, listenerSetter: this.listenerSetter});
+          }, {once: true, listenerSetter: this.listenerSetter});
         }
       }
     } else if(uploadingFileName) {
+      this.classList.add('downloading');
       this.preloader = constructDownloadPreloader(false);
-      this.preloader.attachPromise(appDownloadManager.getUpload(uploadingFileName));
+      const promise = appDownloadManager.getUpload(uploadingFileName);
+      this.preloader.attachPromise(promise);
       this.dataset.isOutgoing = '1';
       this.preloader.attach(downloadDiv, false);
+      promise.then(() => {
+        this.classList.remove('downloading');
+        downloadDiv.classList.add('downloaded');
+        setTimeout(() => {
+          downloadDiv.remove();
+        }, 200);
+      });
       // onLoad();
     }
+  }
+
+  private onDownloadInit(shouldPlay: boolean) {
+    if(shouldPlay) {
+      appMediaPlaybackController.willBePlayed(this.audio); // prepare for loading audio
+
+      if(IS_SAFARI && !this.audio.autoplay) {
+        this.audio.autoplay = true;
+      }
+    }
+  }
+
+  public togglePlay(e?: Event, paused = this.audio.paused) {
+    e && cancelEvent(e);
+
+    if(paused) {
+      this.setTargetsIfNeeded();
+      safePlay(this.audio);
+    } else {
+      this.audio.pause();
+    }
+  }
+
+  public setTargetsIfNeeded() {
+    const hadSearchContext = !!this.searchContext;
+    if(appMediaPlaybackController.setSearchContext(this.searchContext || {
+      peerId: NULL_PEER_ID,
+      inputFilter: {_: 'inputMessagesFilterEmpty'},
+      useSearch: false
+    })) {
+      const [prev, next] = !hadSearchContext ? [] : findMediaTargets(this, this.message.mid/* , this.searchContext.useSearch */);
+      appMediaPlaybackController.setTargets({peerId: this.message.peerId, mid: this.message.mid}, prev, next);
+    }
+  }
+
+  public playWithTimestamp(timestamp: number) {
+    this.load?.(true);
+    setCurrentTime(this.audio, timestamp);
+    this.togglePlay(undefined, true);
+    // appMediaPlaybackController.willBePlayed(this.audio); // prepare for loading audio
+    // this.readyPromise.then(() => {
+    //   if(appMediaPlaybackController.willBePlayedMedia !== this.audio && this.audio.paused) {
+    //     return;
+    //   }
+
+    //   appMediaPlaybackController.willBePlayed(undefined);
+
+    //   this.audio.currentTime = timestamp;
+    //   this.togglePlay(undefined, true);
+    // });
   }
 
   get addAudioListener() {

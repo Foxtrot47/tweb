@@ -4,11 +4,14 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {animate} from '../../helpers/animation';
+import {animateSingle} from '../../helpers/animation';
 import {hexToRgb} from '../../helpers/color';
+import {easeOutQuadApply} from '../../helpers/easing/easeOutQuad';
 
 const WIDTH = 50;
 const HEIGHT = WIDTH;
+
+type Point = {x: number, y: number};
 
 export default class ChatBackgroundGradientRenderer {
   private readonly _width = WIDTH;
@@ -16,16 +19,9 @@ export default class ChatBackgroundGradientRenderer {
   private _phase: number;
   private _tail: number;
   private readonly _tails = 90;
-  private readonly _scrollTails = 50;
+  // private readonly _scrollTails = 50;
   private _frames: ImageData[];
   private _colors: {r: number, g: number, b: number}[];
-  /* private readonly _curve = [
-    0, 25, 50, 75, 100, 150, 200, 250, 300, 350, 400, 500, 600, 700, 800, 900,
-    1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1830, 1860, 1890, 1920,
-    1950, 1980, 2010, 2040, 2070, 2100, 2130, 2160, 2190, 2220, 2250, 2280, 2310,
-    2340, 2370, 2400, 2430, 2460, 2490, 2520, 2550, 2580, 2610, 2630, 2640, 2650,
-    2660, 2670, 2680, 2690, 2700
-  ]; */
   private readonly _curve = [
     0, 0.25, 0.50, 0.75, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 9, 10, 11, 12,
     13, 14, 15, 16, 17, 18, 18.3, 18.6, 18.9, 19.2, 19.5, 19.8, 20.1, 20.4, 20.7,
@@ -33,7 +29,7 @@ export default class ChatBackgroundGradientRenderer {
     24.9, 25.2, 25.5, 25.8, 26.1, 26.3, 26.4, 26.5, 26.6, 26.7, 26.8, 26.9, 27
   ];
   private readonly _incrementalCurve: number[];
-  private readonly _positions = [
+  private readonly _positions: Point[] = [
     {x: 0.80, y: 0.10},
     {x: 0.60, y: 0.20},
     {x: 0.35, y: 0.25},
@@ -44,8 +40,8 @@ export default class ChatBackgroundGradientRenderer {
     {x: 0.75, y: 0.40}
   ];
   private readonly _phases = this._positions.length;
-  private _onWheelRAF: number;
-  private _scrollDelta: number;
+  // private _onWheelRAF: number;
+  // private _scrollDelta: number;
 
   // private _ts = 0;
   // private _fps = 15;
@@ -57,8 +53,11 @@ export default class ChatBackgroundGradientRenderer {
   private _hc: HTMLCanvasElement;
   private _hctx: CanvasRenderingContext2D;
 
-  private _addedScrollListener: boolean;
+  // private _addedScrollListener: boolean;
   private _animatingToNextPosition: boolean;
+  private _nextPositionTail: number;
+  private _nextPositionTails: number;
+  private _nextPositionLeft: number;
 
   constructor() {
     const diff = this._tails / this._curve[this._curve.length - 1];
@@ -79,10 +78,7 @@ export default class ChatBackgroundGradientRenderer {
 
   private getPositions(shift: number) {
     const positions = this._positions.slice();
-    while(shift > 0) {
-      positions.push(positions.shift());
-      --shift;
-    }
+    positions.push(...positions.splice(0, shift));
 
     const result: typeof positions = [];
     for(let i = 0; i < positions.length; i += 2) {
@@ -140,57 +136,91 @@ export default class ChatBackgroundGradientRenderer {
     }
   }
 
-  private onWheel = (e: {deltaY: number}) => {
-    if(this._animatingToNextPosition) {
-      return;
+  // private onWheel = (e: {deltaY: number}) => {
+  //   if(this._animatingToNextPosition) {
+  //     return;
+  //   }
+
+  //   this._scrollDelta += e.deltaY;
+  //   if(this._onWheelRAF === undefined) {
+  //     this._onWheelRAF = requestAnimationFrame(this.drawOnWheel);
+  //   }
+  // };
+
+  private changeTailAndDraw(diff: number) {
+    this.changeTail(diff);
+    const curPos = this.curPosition(this._phase, this._tail);
+    this.drawGradient(curPos);
+  }
+
+  // private drawOnWheel = () => {
+  //   const value = this._scrollDelta / this._scrollTails;
+  //   this._scrollDelta %= this._scrollTails;
+  //   const diff = value > 0 ? Math.floor(value) : Math.ceil(value);
+  //   if(diff) {
+  //     this.changeTailAndDraw(diff);
+  //   }
+  //   this._onWheelRAF = undefined;
+  // };
+
+  private drawNextPositionAnimated = (getProgress?: () => number) => {
+    let done: boolean, id: ImageData;
+    if(getProgress) {
+      const value = getProgress();
+      done = value >= 1;
+      const transitionValue = easeOutQuadApply(value, 1);
+      const nextPositionTail = this._nextPositionTail ?? 0;
+      const tail = this._nextPositionTail = this._nextPositionTails * transitionValue;
+      const diff = tail - nextPositionTail;
+      if(diff) {
+        this._nextPositionLeft -= diff;
+        this.changeTailAndDraw(-diff);
+      }
+    } else {
+      const frames = this._frames;
+      id = frames.shift();
+      done = !frames.length;
     }
 
-    this._scrollDelta += e.deltaY;
-    if(this._onWheelRAF === undefined) {
-      this._onWheelRAF = requestAnimationFrame(this.drawOnWheel);
-    }
-  };
-
-  private drawOnWheel = () => {
-    let diff = this._scrollDelta / this._scrollTails;
-    this._scrollDelta %= this._scrollTails;
-    diff = diff > 0 ? Math.floor(diff) : Math.ceil(diff);
-    if(diff) {
-      this.changeTail(diff);
-      const curPos = this.curPosition(this._phase, this._tail);
-      this.drawGradient(curPos);
-    }
-    this._onWheelRAF = undefined;
-  };
-
-  private drawNextPositionAnimated = () => {
-    const frames = this._frames;
-    const id = frames.shift();
     if(id) {
       this.drawImageData(id);
     }
 
-    const leftLength = frames.length;
-    if(!leftLength) {
+    if(done) {
+      this._nextPositionLeft = undefined;
+      this._nextPositionTails = undefined;
+      this._nextPositionTail = undefined;
       this._animatingToNextPosition = undefined;
     }
 
-    return !!leftLength;
+    return !done;
   };
 
-  private getGradientImageData(positions: {x: number, y: number}[]) {
+  private getGradientImageData(positions: Point[], phase = this._phase, progress = 1 - this._tail / this._tails) {
     const id = this._hctx.createImageData(this._width, this._height);
     const pixels = id.data;
+    const colorsLength = this._colors.length;
+
+    const positionsForPhase = (phase: number) => {
+      const result: typeof positions = [];
+      for(let i = 0; i != 4; ++i) {
+        result[i] = {...this._positions[(phase + i * 2) % this._positions.length]};
+        result[i].y = 1.0 - result[i].y;
+      }
+      return result;
+    };
+
+    const previousPhase = (phase + 1) % this._positions.length;
+    const previous = positionsForPhase(previousPhase);
+    const current = positionsForPhase(phase);
 
     let offset = 0;
     for(let y = 0; y < this._height; ++y) {
       const directPixelY = y / this._height;
       const centerDistanceY = directPixelY - 0.5;
       const centerDistanceY2 = centerDistanceY * centerDistanceY;
-
       for(let x = 0; x < this._width; ++x) {
         const directPixelX = x / this._width;
-
         const centerDistanceX = directPixelX - 0.5;
         const centerDistance = Math.sqrt(centerDistanceX * centerDistanceX + centerDistanceY2);
 
@@ -203,14 +233,12 @@ export default class ChatBackgroundGradientRenderer {
         const pixelY = Math.max(0.0, Math.min(1.0, 0.5 + centerDistanceX * sinTheta + centerDistanceY * cosTheta));
 
         let distanceSum = 0.0;
-
         let r = 0.0;
         let g = 0.0;
         let b = 0.0;
-
-        for(let i = 0; i < this._colors.length; i++) {
-          const colorX = positions[i].x;
-          const colorY = positions[i].y;
+        for(let i = 0; i < colorsLength; ++i) {
+          const colorX = previous[i].x + (current[i].x - previous[i].x) * progress;
+          const colorY = previous[i].y + (current[i].y - previous[i].y) * progress;
 
           const distanceX = pixelX - colorX;
           const distanceY = pixelY - colorY;
@@ -219,14 +247,14 @@ export default class ChatBackgroundGradientRenderer {
           distance = distance * distance * distance * distance;
           distanceSum += distance;
 
-          r += distance * this._colors[i].r / 255;
-          g += distance * this._colors[i].g / 255;
-          b += distance * this._colors[i].b / 255;
+          r += distance * this._colors[i].r;
+          g += distance * this._colors[i].g;
+          b += distance * this._colors[i].b;
         }
 
-        pixels[offset++] = r / distanceSum * 255.0;
-        pixels[offset++] = g / distanceSum * 255.0;
-        pixels[offset++] = b / distanceSum * 255.0;
+        pixels[offset++] = r / distanceSum;
+        pixels[offset++] = g / distanceSum;
+        pixels[offset++] = b / distanceSum;
         pixels[offset++] = 0xFF;
       }
     }
@@ -238,7 +266,7 @@ export default class ChatBackgroundGradientRenderer {
     this._ctx.drawImage(this._hc, 0, 0, this._width, this._height);
   }
 
-  private drawGradient(positions: {x: number, y: number}[]) {
+  private drawGradient(positions: Point[]) {
     this.drawImageData(this.getGradientImageData(positions));
   }
 
@@ -268,13 +296,13 @@ export default class ChatBackgroundGradientRenderer {
     this._frames = [];
     this._phase = 0;
     this._tail = 0;
-    this._scrollDelta = 0;
-    if(this._onWheelRAF !== undefined) {
-      cancelAnimationFrame(this._onWheelRAF);
-      this._onWheelRAF = undefined;
-    }
+    // this._scrollDelta = 0;
+    // if(this._onWheelRAF !== undefined) {
+    //   cancelAnimationFrame(this._onWheelRAF);
+    //   this._onWheelRAF = undefined;
+    // }
 
-    const colors = el.getAttribute('data-colors').split(',').reverse();
+    const colors = el.getAttribute('data-colors').split(',');
     this._colors = colors.map((color) => {
       return this.hexToRgb(color);
     });
@@ -291,7 +319,7 @@ export default class ChatBackgroundGradientRenderer {
     this.update();
   }
 
-  public update() {
+  private update() {
     if(this._colors.length < 2) {
       const color = this._colors[0];
       this._ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
@@ -299,12 +327,21 @@ export default class ChatBackgroundGradientRenderer {
       return;
     }
 
-    const pos = this.curPosition(this._phase, this._tail);
-    this.drawGradient(pos);
+    const position = this.curPosition(this._phase, this._tail);
+    this.drawGradient(position);
   }
 
-  public toNextPosition() {
+  public toNextPosition(getProgress?: () => number) {
     if(this._colors.length < 2) {
+      return;
+    }
+
+    if(getProgress) {
+      this._nextPositionLeft = this._tails + (this._nextPositionLeft ?? 0);
+      this._nextPositionTails = this._nextPositionLeft;
+      this._nextPositionTail = undefined;
+      this._animatingToNextPosition = true;
+      animateSingle(this.drawNextPositionAnimated.bind(this, getProgress), this);
       return;
     }
 
@@ -356,25 +393,29 @@ export default class ChatBackgroundGradientRenderer {
     });
 
     this._animatingToNextPosition = true;
-    animate(this.drawNextPositionAnimated);
+    animateSingle(this.drawNextPositionAnimated, this);
   }
 
-  public scrollAnimate(start?: boolean) {
-    if(this._colors.length < 2 && start) {
-      return;
-    }
+  // public toNextPositionThrottled = throttle(this.toNextPosition.bind(this), 100, true);
 
-    if(start && !this._addedScrollListener) {
-      document.addEventListener('wheel', this.onWheel);
-      this._addedScrollListener = true;
-    } else if(!start && this._addedScrollListener) {
-      document.removeEventListener('wheel', this.onWheel);
-      this._addedScrollListener = false;
-    }
-  }
+  // public scrollAnimate(start?: boolean) {
+  //   return;
+
+  //   if(this._colors.length < 2 && start) {
+  //     return;
+  //   }
+
+  //   if(start && !this._addedScrollListener) {
+  //     document.addEventListener('wheel', this.onWheel);
+  //     this._addedScrollListener = true;
+  //   } else if(!start && this._addedScrollListener) {
+  //     document.removeEventListener('wheel', this.onWheel);
+  //     this._addedScrollListener = false;
+  //   }
+  // }
 
   public cleanup() {
-    this.scrollAnimate(false);
+    // this.scrollAnimate(false);
     // this.animate(false);
   }
 

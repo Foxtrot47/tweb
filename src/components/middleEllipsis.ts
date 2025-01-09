@@ -63,6 +63,11 @@ window.addEventListener('resize', () => {
 }, {capture: true, passive: true});
 
 function getElementWidth(element: HTMLElement) {
+  const getSize = (element as any).getSize;
+  if(getSize) {
+    return getSize();
+  }
+
   const type = element.dataset.sizeType;
   if(type) {
     const mediaSize = mediaSizes.active;
@@ -89,8 +94,10 @@ function testElement(element: HTMLElement) {
     from = /* parseFloat(element.getAttribute(attributeName)) ||  */50;
     multiplier = from > 0 && from / 100;
 
+    let fontSize = element.dataset.fontSize;
+    if(fontSize && +fontSize) fontSize += 'px';
     // const perf = performance.now();
-    font = `${element.dataset.fontWeight || FontWeight} ${FontSize} ${FontFamily}`;
+    font = `${element.dataset.fontWeight || FontWeight} ${fontSize || FontSize} ${FontFamily}`;
     /* const computedStyle = window.getComputedStyle(elm, null);
     font = `${computedStyle.getPropertyValue('font-weight')} ${computedStyle.getPropertyValue('font-size')} ${computedStyle.getPropertyValue('font-family')}`; */
     // console.log('testMiddleEllipsis get computed style:', performance.now() - perf, font);
@@ -145,7 +152,7 @@ export class MiddleEllipsisElement extends HTMLElement {
     // console.log('[MEE]: connectedCallback before', map.has(this), testQueue.has(this), map.size, this.textContent, map);
 
     map.set(this, null);
-    if(this.dataset.sizeType) {
+    if(this.dataset.sizeType || (this as any).getSize) {
       testElement(this);
     } else {
       testQueue.add(this);

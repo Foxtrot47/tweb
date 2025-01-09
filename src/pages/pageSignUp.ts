@@ -7,22 +7,23 @@
 import type {CancellablePromise} from '../helpers/cancellablePromise';
 import type {InputFile} from '../layer';
 import type {AuthState} from '../types';
-import Button from '../components/button';
-import InputField from '../components/inputField';
-import {putPreloader} from '../components/putPreloader';
-import PopupAvatar from '../components/popups/avatar';
-import I18n, {i18n} from '../lib/langPack';
 import LoginPage from './loginPage';
 import Page from './page';
 import blurActiveElement from '../helpers/dom/blurActiveElement';
-import replaceContent from '../helpers/dom/replaceContent';
-import PopupElement from '../components/popups';
-import wrapEmojiText from '../lib/richTextProcessor/wrapEmojiText';
 import rootScope from '../lib/rootScope';
+import InputField from '../components/inputField';
+import PopupElement from '../components/popups';
+import PopupAvatar from '../components/popups/avatar';
+import replaceContent from '../helpers/dom/replaceContent';
+import I18n, {i18n} from '../lib/langPack';
+import wrapEmojiText from '../lib/richTextProcessor/wrapEmojiText';
+import Button from '../components/button';
+import {putPreloader} from '../components/putPreloader';
+import Icon from '../components/icon';
 
 let authCode: AuthState.signUp['authCode'] = null;
 
-const onFirstMount = () => {
+const onFirstMount = async() => {
   const page = new LoginPage({
     className: 'page-signUp',
     withInputWrapper: true,
@@ -38,9 +39,7 @@ const onFirstMount = () => {
   avatarPreview.id = 'canvas-avatar';
   avatarPreview.className = 'avatar-edit-canvas';
 
-  const addIco = document.createElement('span');
-  addIco.className = 'tgico tgico-cameraadd';
-
+  const addIco = Icon('cameraadd', 'avatar-edit-icon');
   page.imageDiv.append(avatarPreview, addIco);
 
   let uploadAvatar: () => CancellablePromise<InputFile>;
@@ -123,12 +122,12 @@ const onFirstMount = () => {
     const preloader = putPreloader(this);
 
     rootScope.managers.apiManager.invokeApi('auth.signUp', params)
-    .then((response) => {
+    .then(async(response) => {
       // console.log('auth.signUp response:', response);
 
       switch(response._) {
         case 'auth.authorization': // success
-          rootScope.managers.apiManager.setUser(response.user);
+          await rootScope.managers.apiManager.setUser(response.user);
 
           sendAvatar().finally(() => {
             import('./pageIm').then((m) => {

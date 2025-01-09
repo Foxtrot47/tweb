@@ -6,20 +6,104 @@
 
 import PopupElement, {addCancelButton} from '.';
 import setInnerHTML from '../../helpers/dom/setInnerHTML';
+import {Middleware} from '../../helpers/middleware';
 import numberThousandSplitter from '../../helpers/number/numberThousandSplitter';
-import {ChatInvite} from '../../layer';
+import {Chat, ChatInvite} from '../../layer';
 import appImManager from '../../lib/appManagers/appImManager';
-import {i18n, _i18n} from '../../lib/langPack';
+import {i18n, _i18n, LangPackKey} from '../../lib/langPack';
 import {NULL_PEER_ID} from '../../lib/mtproto/mtproto_config';
 import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
-import AvatarElement from '../avatar';
-import putPhoto from '../putPhoto';
+import rootScope from '../../lib/rootScope';
+import {avatarNew, wrapPhotoToAvatar} from '../avatarNew';
+import generateTitleIcons from '../generateTitleIcons';
 import {toastNew} from '../toast';
-import {wrapPhoto} from '../wrappers';
+import PopupPeer from './peer';
 
 // const FAKE_CHAT_ID = Number.MAX_SAFE_INTEGER - 0x1000;
 
-export default class PopupJoinChatInvite extends PopupElement {
+const getJoinLangKey = (chatInvite: ChatInvite.chatInvite | ChatInvite.chatInvitePeek): LangPackKey => {
+  if(chatInvite._ === 'chatInvitePeek') {
+    const chat = (chatInvite as ChatInvite.chatInvitePeek).chat as Chat.channel | Chat.chat;
+    return (chat as Chat.channel).pFlags.broadcast ? 'JoinByPeekChannelTitle' : 'JoinByPeekGroupTitle';
+  }
+
+  if(chatInvite.pFlags.request_needed) {
+    return 'RequestJoin.Button';
+  }
+
+  if(chatInvite.pFlags.broadcast) {
+    return 'JoinByPeekChannelTitle';
+  }
+
+  return 'JoinByPeekGroupTitle';
+};
+
+export async function wrapChatInviteTitle(
+  chatInvite: ChatInvite.chatInvite,
+  middleware: Middleware
+) {
+  const title = document.createElement('div');
+  title.classList.add('peer-title', 'chat-title');
+
+  const icons = await generateTitleIcons({
+    peerId: NULL_PEER_ID,
+    noVerifiedIcon: false,
+    noFakeIcon: false,
+    noPremiumIcon: false,
+    peer: {
+      _: 'channel',
+      pFlags: {
+        verified: chatInvite.pFlags.verified,
+        scam: chatInvite.pFlags.scam,
+        fake: chatInvite.pFlags.fake
+      },
+      date: 0,
+      id: 0,
+      photo: undefined,
+      title: ''
+    },
+    wrapOptions: {
+      middleware
+    }
+  });
+
+  const titleFragment = wrapEmojiText(chatInvite.title);
+  if(icons.length) {
+    title.classList.add('with-icons');
+    const titleInner = document.createElement('span');
+    titleInner.classList.add('peer-title-inner');
+    titleInner.append(titleFragment);
+    title.append(titleInner, ...icons);
+  } else {
+    setInnerHTML(title, titleFragment);
+  }
+
+  return title;
+}
+
+export async function wrapChatInviteAvatar(chatInvite: ChatInvite.chatInvite, middleware: Middleware, size: number) {
+  const avatarElem = avatarNew({
+    middleware,
+    size,
+    isDialog: false,
+    isSubscribed: !!chatInvite.subscription_pricing || undefined
+  });
+  if(chatInvite.photo?._ === 'photo') {
+    await wrapPhotoToAvatar(avatarElem, chatInvite.photo);
+    if(chatInvite.subscription_pricing) {
+      avatarElem.setIsSubscribed(true);
+    }
+  } else {
+    avatarElem.render({
+      peerTitle: chatInvite.title
+    });
+    await avatarElem.readyThumbPromise;
+  }
+
+  return avatarElem;
+}
+
+export default class PopupJoinChatInvite extends PopupPeer {
   constructor(
     private hash: string,
     private chatInvite: ChatInvite.chatInvite
@@ -29,22 +113,43 @@ export default class PopupJoinChatInvite extends PopupElement {
       overlayClosable: true,
       body: true,
       buttons: addCancelButton([{
-        langKey: chatInvite.pFlags.request_needed ? 'RequestJoin.Button' : (chatInvite.pFlags.broadcast ? 'JoinByPeekChannelTitle' : 'JoinByPeekGroupTitle'),
+        langKey: getJoinLangKey(chatInvite),
         callback: () => {
-          this.managers.appChatsManager.importChatInvite(hash)
-          .then((chatId) => {
-            const peerId = chatId.toPeerId(true);
-            appImManager.setInnerPeer({peerId});
-          }, (error) => {
-            if(error.type === 'INVITE_REQUEST_SENT') {
-              toastNew({langPackKey: 'RequestToJoinSent'});
-            }
-          });
+          PopupJoinChatInvite.import(hash);
         }
-      }])
+      }]),
+      description: true
     });
 
     this.construct();
+  }
+
+  public static openChat(chatId: ChatId) {
+    const peerId = chatId.toPeerId(true);
+    appImManager.setInnerPeer({peerId});
+  }
+
+  public static import(hash: string) {
+    rootScope.managers.appChatInvitesManager.importChatInvite(hash)
+    .then((chatId) => {
+      this.openChat(chatId);
+    }, (error) => {
+      if(error.type === 'INVITE_REQUEST_SENT') {
+        toastNew({langPackKey: 'RequestToJoinSent'});
+      }
+    });
+  }
+
+  public static async open(hash: string, chatInvite: ChatInvite) {
+    if(chatInvite._ === 'chatInviteAlready') {
+      // load missing chat
+      await rootScope.managers.appChatInvitesManager.checkChatInvite(hash);
+      this.openChat(chatInvite.chat.id);
+    } else if(chatInvite._ === 'chatInvitePeek') {
+      this.openChat(chatInvite.chat.id);
+    } else {
+      PopupElement.createPopup(PopupJoinChatInvite, hash, chatInvite);
+    }
   }
 
   private async construct() {
@@ -62,36 +167,24 @@ export default class PopupJoinChatInvite extends PopupElement {
 
     appChatsManager.saveApiChat(fakeChat); */
 
-    const {chatInvite, managers, hash} = this;
+    const {chatInvite} = this;
 
-    const avatarElem = new AvatarElement();
-    avatarElem.classList.add('avatar-100');
-    avatarElem.isDialog = false;
-    if(chatInvite.photo._ === 'photo') {
-      chatInvite.photo = await managers.appPhotosManager.savePhoto(chatInvite.photo);
-      wrapPhoto({
-        container: avatarElem,
-        message: null,
-        photo: chatInvite.photo,
-        boxHeight: 100,
-        boxWidth: 100,
-        withoutPreloader: true
-      });
-      avatarElem.style.width = avatarElem.style.height = '';
-    } else {
-      putPhoto(avatarElem, NULL_PEER_ID, false, chatInvite.title);
-    }
-
-    const title = document.createElement('div');
-    title.classList.add('chat-title');
-    setInnerHTML(title, wrapEmojiText(chatInvite.title));
+    const avatarElem = await wrapChatInviteAvatar(chatInvite, this.middlewareHelper.get(), 100);
+    const title = await wrapChatInviteTitle(chatInvite, this.middlewareHelper.get());
     // avatarElem.setAttribute('peer', '' + -fakeChat.id);
+
+    if(chatInvite.about) {
+      this.description.replaceChildren(wrapEmojiText(chatInvite.about));
+    } else {
+      this.description.remove();
+      this.description = undefined;
+    }
 
     const isBroadcast = chatInvite.pFlags.broadcast;
     const peopleCount = i18n(isBroadcast ? 'Subscribers' : 'Members', [numberThousandSplitter(chatInvite.participants_count)]);
     peopleCount.classList.add('chat-participants-count');
 
-    this.body.append(avatarElem, title, peopleCount);
+    this.body.append(...[avatarElem.node, title, peopleCount, this.description].filter(Boolean));
 
     if(chatInvite.pFlags.request_needed) {
       const caption = document.createElement('div');

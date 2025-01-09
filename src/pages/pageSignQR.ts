@@ -17,6 +17,7 @@ import pause from '../helpers/schedulers/pause';
 import fixBase64String from '../helpers/fixBase64String';
 import bytesCmp from '../helpers/bytes/bytesCmp';
 import bytesToBase64 from '../helpers/bytes/bytesToBase64';
+import textToSvgURL from '../helpers/textToSvgURL';
 
 const FETCH_INTERVAL = 3;
 
@@ -90,7 +91,7 @@ const onFirstMount = async() => {
 
       if(loginToken._ === 'auth.loginTokenSuccess') {
         const authorization = loginToken.authorization as any as AuthAuthorization.authAuthorization;
-        rootScope.managers.apiManager.setUser(authorization.user);
+        await rootScope.managers.apiManager.setUser(authorization.user);
         import('./pageIm').then((m) => m.default.mount());
         return true;
       }
@@ -114,17 +115,7 @@ const onFirstMount = async() => {
         .then((res) => res.text())
         .then((text) => {
           text = text.replace(/(fill:).+?(;)/, `$1${primaryColor}$2`);
-          const blob = new Blob([text], {type: 'image/svg+xml;charset=utf-8'});
-
-          // * because iOS Safari doesn't want to eat objectURL
-          return new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-              resolve(e.target.result as string);
-            };
-            reader.readAsDataURL(blob);
-          });
-          // return URL.createObjectURL(blob);
+          return textToSvgURL(text);
         });
 
         const qrCode = new QRCodeStyling({
@@ -201,7 +192,6 @@ const onFirstMount = async() => {
     } catch(err) {
       switch((err as ApiError).type) {
         case 'SESSION_PASSWORD_NEEDED':
-          console.warn('pageSignQR: SESSION_PASSWORD_NEEDED');
           (err as ApiError).handled = true;
           import('./pagePassword').then((m) => m.default.mount());
           stop = true;

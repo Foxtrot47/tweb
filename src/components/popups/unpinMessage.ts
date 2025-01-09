@@ -8,7 +8,7 @@ import PopupElement, {addCancelButton} from '.';
 import PopupPeer, {PopupPeerButtonCallbackCheckboxes, PopupPeerOptions} from './peer';
 import rootScope from '../../lib/rootScope';
 import {FormatterArguments, LangPackKey} from '../../lib/langPack';
-import PeerTitle from '../peerTitle';
+import wrapPeerTitle from '../wrappers/peerTitle';
 
 export default class PopupPinMessage {
   constructor(private peerId: PeerId, private mid: number, private unpin?: true, private onConfirm?: () => void) {
@@ -24,7 +24,7 @@ export default class PopupPinMessage {
 
     const canUnpin = await managers.appPeersManager.canPinMessage(peerId);
 
-    const callback = (checked: PopupPeerButtonCallbackCheckboxes, oneSide?: boolean, silent?: boolean) => {
+    const callback = (e: MouseEvent, checked: PopupPeerButtonCallbackCheckboxes, oneSide?: boolean, silent?: boolean) => {
       setTimeout(() => { // * костыль, потому что document.elementFromPoint вернёт popup-peer пока он будет закрываться
         let promise: Promise<any>;
         if(unpin && !mid) {
@@ -72,7 +72,7 @@ export default class PopupPinMessage {
       if(peerId.isAnyChat()) {
         buttons.push({
           langKey: pinButtonText,
-          callback: (checked) => callback(checked, false, !checked.size)
+          callback: (e, checked) => callback(e, checked, false, !checked.size)
         });
 
         if(await managers.appChatsManager.isBroadcast(peerId.toChatId())) {
@@ -96,12 +96,12 @@ export default class PopupPinMessage {
         } else {
           buttons.push({
             langKey: pinButtonText,
-            callback: (checked) => callback(checked, !checked.size)
+            callback: (e, checked) => callback(e, checked, !checked.size)
           });
 
           checkboxes.push({
             text: 'PinAlsoFor',
-            textArgs: [new PeerTitle({peerId}).element],
+            textArgs: [await wrapPeerTitle({peerId})],
             checked: true
           });
         }
@@ -110,7 +110,7 @@ export default class PopupPinMessage {
 
     addCancelButton(buttons);
 
-    const popup = new PopupPeer('popup-delete-chat', {
+    const popup = PopupElement.createPopup(PopupPeer, 'popup-delete-chat', {
       peerId,
       titleLangKey: title,
       descriptionLangKey: description,

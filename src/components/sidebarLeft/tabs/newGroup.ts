@@ -4,17 +4,17 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import appSidebarLeft, {SettingSection} from '..';
 import {InputFile} from '../../../layer';
 import appDialogsManager from '../../../lib/appManagers/appDialogsManager';
 import InputField from '../../inputField';
 import {SliderSuperTab} from '../../slider';
 import AvatarEdit from '../../avatarEdit';
-import I18n from '../../../lib/langPack';
+import I18n, {joinElementsWith} from '../../../lib/langPack';
 import ButtonCorner from '../../buttonCorner';
 import getUserStatusString from '../../wrappers/getUserStatusString';
 import appImManager from '../../../lib/appManagers/appImManager';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
+import SettingSection from '../../settingSection';
 
 interface OpenStreetMapInterface {
   place_id?: number;
@@ -40,7 +40,24 @@ export default class AppNewGroupTab extends SliderSuperTab {
   private userLocationCoords: {lat: number, long: number};
   private userLocationAddress: string;
 
-  protected init() {
+  public init({
+    peerIds,
+    isGeoChat = false,
+    onCreate,
+    openAfter = true,
+    title,
+    asChannel = false
+  }: {
+    peerIds: PeerId[],
+    isGeoChat?: boolean,
+    onCreate?: (chatId: ChatId) => void,
+    openAfter?: boolean,
+    title?: string,
+    asChannel?: boolean
+  }) {
+    this.isGeoChat = isGeoChat;
+    this.peerIds = peerIds;
+
     this.container.classList.add('new-group-container');
     this.setTitle('NewGroup');
 
@@ -80,6 +97,7 @@ export default class AppNewGroupTab extends SliderSuperTab {
 
     attachClickEvent(this.nextBtn, () => {
       const title = this.groupNameInputField.value;
+      const userIds = this.peerIds.map((peerId) => peerId.toUserId());
 
       let promise: Promise<ChatId>;
       if(this.isGeoChat) {
@@ -108,7 +126,28 @@ export default class AppNewGroupTab extends SliderSuperTab {
         });
       } else {
         this.nextBtn.disabled = true;
-        promise = this.managers.appChatsManager.createChat(title, this.peerIds.map((peerId) => peerId.toUserId())).then((chatId) => {
+
+        if(asChannel) {
+          promise = this.managers.appChatsManager.createChannel({
+            megagroup: true,
+            title,
+            about: ''
+          });
+
+          if(peerIds.length) {
+            promise = promise.then((chatId) => {
+              return this.managers.appChatsManager.inviteToChannel(chatId, userIds)
+              .then(() => chatId);
+            });
+          }
+        } else {
+          promise = this.managers.appChatsManager.createChat(
+            title,
+            userIds
+          );
+        }
+
+        promise = promise.then((chatId) => {
           if(this.uploadAvatar) {
             this.uploadAvatar().then((inputFile) => {
               this.managers.appChatsManager.editPhoto(chatId, inputFile);
@@ -124,10 +163,9 @@ export default class AppNewGroupTab extends SliderSuperTab {
       }
 
       promise.then((chatId) => {
-        appSidebarLeft.removeTabFromHistory(this);
-        appSidebarLeft.selectTab(0);
-
-        appImManager.setInnerPeer({peerId: chatId.toPeerId(true)});
+        onCreate?.(chatId);
+        this.close();
+        if(openAfter) appImManager.setInnerPeer({peerId: chatId.toPeerId(true)});
       });
     }, {listenerSetter: this.listenerSetter});
 
@@ -135,6 +173,10 @@ export default class AppNewGroupTab extends SliderSuperTab {
       name: 'Members',
       nameArgs: [this.peerIds.length]
     });
+
+    if(!this.peerIds.length) {
+      chatsSection.container.classList.add('hide');
+    }
 
     const list = this.list = appDialogsManager.createChatList({
       new: true
@@ -146,6 +188,52 @@ export default class AppNewGroupTab extends SliderSuperTab {
 
     this.content.append(this.nextBtn);
     this.scrollable.append(section.container, chatsSection.container);
+
+    if(isGeoChat) {
+      this.setTitle('NearbyCreateGroup');
+      this.groupLocationInputField.container.classList.remove('hide');
+      this.groupLocationInputField.setValueSilently(I18n.format('Loading', true));
+      this.startLocating();
+    } else {
+      this.groupLocationInputField.container.classList.add('hide');
+    }
+
+    const usersPromise = Promise.all(this.peerIds.map((peerId) => this.managers.appUsersManager.getUser(peerId.toUserId())));
+    const myUserPromise = this.managers.appUsersManager.getSelf();
+
+    const a = usersPromise.then((users) => {
+      return users.map((user) => {
+        const {dom} = appDialogsManager.addDialogNew({
+          peerId: user.id.toPeerId(false),
+          container: this.list,
+          rippleEnabled: false,
+          avatarSize: 'abitbigger',
+          wrapOptions: {
+            middleware: this.middlewareHelper.get()
+          }
+        });
+
+        dom.lastMessageSpan.append(getUserStatusString(user));
+      })
+    });
+
+    let setTitlePromise: Promise<void>;
+
+    if(!title) setTitlePromise = this.peerIds.length > 0 && this.peerIds.length < 5 ? Promise.all([usersPromise, myUserPromise]).then(([users, myUser]) => {
+      const names = users.map((user) => [user.first_name, user.last_name].filter(Boolean).join(' '));
+      names.unshift(myUser.first_name);
+
+      const joined = joinElementsWith(names, (isLast) => isLast ? ', ' : ' & ').join('');
+      this.groupNameInputField.setDraftValue(joined);
+    }) : Promise.resolve();
+    else {
+      this.groupNameInputField.setDraftValue(title);
+    }
+
+    return Promise.all([
+      a,
+      setTitlePromise
+    ]);
   }
 
   public onCloseAfterTimeout() {
@@ -154,35 +242,6 @@ export default class AppNewGroupTab extends SliderSuperTab {
     this.groupNameInputField.value = '';
     this.groupLocationInputField.container.classList.add('hide');
     this.nextBtn.disabled = false;
-  }
-
-  public open(peerIds: PeerId[], isGeoChat: boolean = false) {
-    this.isGeoChat = isGeoChat;
-    this.peerIds = peerIds;
-    const result = super.open();
-    result.then(() => {
-      if(isGeoChat) {
-        this.setTitle('NearbyCreateGroup');
-        this.groupLocationInputField.container.classList.remove('hide');
-        this.groupLocationInputField.setValueSilently(I18n.format('Loading', true));
-        this.startLocating();
-      } else {
-        this.groupLocationInputField.container.classList.add('hide');
-      }
-
-      return Promise.all(this.peerIds.map(async(userId) => {
-        const {dom} = appDialogsManager.addDialogNew({
-          peerId: userId,
-          container: this.list,
-          rippleEnabled: false,
-          avatarSize: 48
-        });
-
-        dom.lastMessageSpan.append(getUserStatusString(await this.managers.appUsersManager.getUser(userId)));
-      }));
-    });
-
-    return result;
   }
 
   private startLocating() {

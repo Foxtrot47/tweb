@@ -4,22 +4,25 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {i18n, LangPackKey} from '../lib/langPack';
+import {FormatterArguments, i18n, LangPackKey} from '../lib/langPack';
+import Icon from './icon';
 import ripple from './ripple';
 
 export type ButtonOptions = Partial<{
   noRipple: true,
   onlyMobile: true,
-  icon: string,
+  icon: Icon,
   rippleSquare: true,
   text: LangPackKey,
+  textArgs?: FormatterArguments,
   disabled: boolean,
-  asDiv: boolean
+  asDiv: boolean,
+  asLink: boolean
 }>;
 
-const Button = (className: string, options: ButtonOptions = {}) => {
-  const button: HTMLButtonElement = document.createElement(options.asDiv ? 'div' : 'button') as any;
-  button.className = className + (options.icon ? ' tgico-' + options.icon : '');
+export default function Button<T extends ButtonOptions>(className: string, options: T = {} as T): T['asLink'] extends true ? HTMLAnchorElement : HTMLButtonElement {
+  const button = document.createElement(options.asLink ? 'a' : (options.asDiv ? 'div' : 'button'));
+  button.className = className;
 
   if(!options.noRipple) {
     if(options.rippleSquare) {
@@ -27,6 +30,10 @@ const Button = (className: string, options: ButtonOptions = {}) => {
     }
 
     ripple(button);
+  }
+
+  if(options.icon) {
+    replaceButtonIcon(button, options.icon, false);
   }
 
   if(options.onlyMobile) {
@@ -38,10 +45,15 @@ const Button = (className: string, options: ButtonOptions = {}) => {
   }
 
   if(options.text) {
-    button.append(i18n(options.text));
+    button.append(i18n(options.text, options.textArgs));
   }
 
-  return button;
-};
+  return button as any;
+}
 
-export default Button;
+export function replaceButtonIcon(element: HTMLElement, icon: Icon, oldIcon: Element | false = element.querySelector('.button-icon')) {
+  const newIcon = Icon(icon, 'button-icon');
+  if(oldIcon) oldIcon.replaceWith(newIcon);
+  else element.append(newIcon);
+  return newIcon;
+}

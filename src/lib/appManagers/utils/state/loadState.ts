@@ -6,7 +6,7 @@
 
 import App from '../../../../config/app';
 import DEBUG from '../../../../config/debug';
-import {AutoDownloadPeerTypeSettings, State, STATE_INIT} from '../../../../config/state';
+import {AutoDownloadPeerTypeSettings, State, STATE_INIT, Background, AppTheme} from '../../../../config/state';
 import compareVersion from '../../../../helpers/compareVersion';
 import copy from '../../../../helpers/object/copy';
 import validateInitObject from '../../../../helpers/object/validateInitObject';
@@ -17,7 +17,8 @@ import sessionStorage from '../../../sessionStorage';
 import {recordPromiseBound} from '../../../../helpers/recordPromise';
 // import RESET_STORAGES_PROMISE from "../storages/resetStoragesPromise";
 import {StoragesResults} from '../storages/loadStorages';
-import {logger} from '../../../logger';
+import {LogTypes, logger} from '../../../logger';
+import {WallPaper} from '../../../../layer';
 
 const REFRESH_EVERY = 24 * 60 * 60 * 1000; // 1 day
 // const REFRESH_EVERY = 1e3;
@@ -38,7 +39,7 @@ const REFRESH_KEYS: Array<keyof State> = [
 // const REFRESH_KEYS_WEEK = ['dialogs', 'allDialogsLoaded', 'updates', 'pinnedOrders'] as any as Array<keyof State>;
 
 async function loadStateInner() {
-  const log = logger('STATE-LOADER');
+  const log = logger('STATE-LOADER', LogTypes.Error);
 
   const totalPerf = performance.now();
   const recordPromise = recordPromiseBound(log);
@@ -47,9 +48,13 @@ async function loadStateInner() {
   .concat(
     recordPromise(sessionStorage.get('user_auth'), 'auth'),
     recordPromise(sessionStorage.get('state_id'), 'auth'),
-    recordPromise(sessionStorage.get('k_build'), 'auth')
+    recordPromise(sessionStorage.get('k_build'), 'auth'),
+    recordPromise(sessionStorage.get('auth_key_fingerprint'), 'auth'),
+    recordPromise(sessionStorage.get(`dc${App.baseDcId}_auth_key`), 'auth')
   )
-  .concat(recordPromise(stateStorage.get('user_auth'), 'old auth')); // support old webk format
+  .concat( // support old webk format
+    recordPromise(stateStorage.get('user_auth'), 'old auth')
+  );
 
   const arr = await Promise.all(promises);
   log.warn('promises', performance.now() - totalPerf);
@@ -124,6 +129,8 @@ async function loadStateInner() {
   let auth = arr.shift() as UserAuth | number;
   const stateId = arr.shift() as number;
   const sessionBuild = arr.shift() as number;
+  const authKeyFingerprint = arr.shift() as string;
+  const baseDcAuthKey = arr.shift() as string;
   const shiftedWebKAuth = arr.shift() as UserAuth | number;
   if(!auth && shiftedWebKAuth) { // support old webk auth
     auth = shiftedWebKAuth;
@@ -178,40 +185,51 @@ async function loadStateInner() {
   }
 
   const resetStorages: Set<keyof StoragesResults> = new Set();
+  const resetState = (preserveKeys: (keyof State)[]) => {
+    preserveKeys.push('authState', 'stateId');
+    const preserve: Map<keyof State, State[keyof State]> = new Map(
+      preserveKeys.map((key) => [key, state[key]])
+    );
+
+    state = copy(STATE_INIT);
+
+    preserve.forEach((value, key) => {
+      // @ts-ignore
+      state[key] = value;
+    });
+
+    const r: (keyof StoragesResults)[] = ['chats', 'dialogs', 'users'];
+    for(const key of r) {
+      resetStorages.add(key);
+      // this.storagesResults[key as keyof AppStateManager['storagesResults']].length = 0;
+    }
+
+    replaceState(state);
+  };
+
   if(state.stateId !== stateId) {
     if(stateId !== undefined) {
-      const preserve: Map<keyof State, State[keyof State]> = new Map([
-        ['authState', undefined],
-        ['stateId', undefined]
-      ]);
-
-      preserve.forEach((_, key) => {
-        preserve.set(key, copy(state[key]));
-      });
-
-      state = copy(STATE_INIT);
-
-      preserve.forEach((value, key) => {
-        // @ts-ignore
-        state[key] = value;
-      });
-
-      const r: {[k in keyof StoragesResults]: number} = {
-        chats: 1,
-        dialogs: 1,
-        users: 1
-      };
-      for(const key in r) {
-        resetStorages.add(key as keyof StoragesResults);
-        // this.storagesResults[key as keyof AppStateManager['storagesResults']].length = 0;
-      }
-
-      replaceState(state);
+      resetState([]);
     }
 
     await sessionStorage.set({
       state_id: state.stateId
     });
+  }
+
+  if(baseDcAuthKey) {
+    const _authKeyFingerprint = baseDcAuthKey.slice(0, 8);
+    if(!authKeyFingerprint) { // * migration, preserve settings
+      resetState(['settings']);
+    } else if(authKeyFingerprint !== _authKeyFingerprint) {
+      resetState([]);
+    }
+
+    if(authKeyFingerprint !== _authKeyFingerprint) {
+      await sessionStorage.set({
+        auth_key_fingerprint: _authKeyFingerprint
+      });
+    }
   }
 
   const time = Date.now();
@@ -245,22 +263,6 @@ async function loadStateInner() {
 
   // state = this.state = new Proxy(state, getHandler());
 
-  // * support old version
-  if(!state.settings.hasOwnProperty('theme') && state.settings.hasOwnProperty('nightTheme')) {
-    state.settings.theme = state.settings.nightTheme ? 'night' : 'day';
-    pushToState('settings', state.settings);
-  }
-
-  // * support old version
-  if(!state.settings.hasOwnProperty('themes') && state.settings.background) {
-    state.settings.themes = copy(STATE_INIT.settings.themes);
-    const theme = state.settings.themes.find((t) => t.name === state.settings.theme);
-    if(theme) {
-      theme.background = state.settings.background;
-      pushToState('settings', state.settings);
-    }
-  }
-
   // * migrate auto download settings
   const autoDownloadSettings = state.settings.autoDownload;
   if(autoDownloadSettings?.private !== undefined) {
@@ -291,46 +293,136 @@ async function loadStateInner() {
     pushToState('settings', state.settings);
   }
 
+  const SKIP_VALIDATING_PATHS: Set<string> = new Set([
+    'settings.themes'
+  ]);
   validateInitObject(STATE_INIT, state, (missingKey) => {
     pushToState(missingKey as keyof State, state[missingKey as keyof State]);
-  });
+  }, undefined, SKIP_VALIDATING_PATHS);
 
   let newVersion: string, oldVersion: string;
   if(state.version !== STATE_VERSION || state.build !== BUILD/*  || true */) {
     // reset filters and dialogs if version is older
-    if(/* compareVersion(state.version, '0.8.7') === -1 || state.build < 179 ||  */state.build < 217) {
-      state.allDialogsLoaded = copy(STATE_INIT.allDialogsLoaded);
-      state.pinnedOrders = copy(STATE_INIT.pinnedOrders);
-      state.filtersArr = copy(STATE_INIT.filtersArr);
+    if(state.build < 322) {
+      pushToState('allDialogsLoaded', copy(STATE_INIT.allDialogsLoaded));
+      pushToState('pinnedOrders', copy(STATE_INIT.pinnedOrders));
+      pushToState('filtersArr', copy(STATE_INIT.filtersArr));
 
       resetStorages.add('dialogs');
     }
 
-    // * migrate backgrounds (March 13, 2022; to version 1.3.0)
-    if(compareVersion(state.version, '1.3.0') === -1) {
+    if(compareVersion(state.version, '1.7.1') === -1) {
       let migrated = false;
-      state.settings.themes.forEach((theme, idx, arr) => {
-        if((
-          theme.name === 'day' &&
-          theme.background.slug === 'ByxGo2lrMFAIAAAAmkJxZabh8eM' &&
-          theme.background.type === 'image'
-        ) || (
-          theme.name === 'night' &&
-          theme.background.color === '#0f0f0f' &&
-          theme.background.type === 'color'
-        )) {
-          const newTheme = STATE_INIT.settings.themes.find((newTheme) => newTheme.name === theme.name);
-          if(newTheme) {
-            arr[idx] = copy(newTheme);
-            migrated = true;
-          }
+      // * migrate backgrounds (March 13, 2022; to version 1.3.0)
+      if(compareVersion(state.version, '1.3.0') === -1) {
+        migrated = true;
+        state.settings.theme = copy(STATE_INIT.settings.theme);
+        state.settings.themes = copy(STATE_INIT.settings.themes);
+      } else if(compareVersion(state.version, '1.7.1') === -1) { // * migrate backgrounds (January 25th, 2023; to version 1.7.1)
+        migrated = true;
+        const oldThemes = state.settings.themes as any as Array<{
+          name: AppTheme['name'],
+          background: Background
+        }>;
+
+        state.settings.themes = copy(STATE_INIT.settings.themes);
+
+        try {
+          oldThemes.forEach((oldTheme) => {
+            const oldBackground = oldTheme.background;
+            if(!oldBackground) {
+              return;
+            }
+
+            const newTheme = state.settings.themes.find((t) => t.name === oldTheme.name);
+            newTheme.settings.highlightingColor = oldBackground.highlightingColor;
+
+            const getColorFromHex = (hex: string) => hex && parseInt(hex.slice(1), 16);
+
+            const colors = (oldBackground.color || '').split(',').map(getColorFromHex);
+
+            if(oldBackground.color && !oldBackground.slug) {
+              newTheme.settings.wallpaper = {
+                _: 'wallPaperNoFile',
+                id: 0,
+                pFlags: {},
+                settings: {
+                  _: 'wallPaperSettings',
+                  pFlags: {}
+                }
+              };
+            } else {
+              const wallPaper: WallPaper.wallPaper = {
+                _: 'wallPaper',
+                id: 0,
+                access_hash: 0,
+                slug: oldBackground.slug,
+                document: {} as any,
+                pFlags: {},
+                settings: {
+                  _: 'wallPaperSettings',
+                  pFlags: {}
+                }
+              };
+
+              const wallPaperSettings = wallPaper.settings;
+              newTheme.settings.wallpaper = wallPaper;
+              if(oldBackground.slug && !oldBackground.color) {
+                wallPaperSettings.pFlags.blur = oldBackground.blur || undefined;
+              } else if(oldBackground.intensity) {
+                wallPaperSettings.intensity = oldBackground.intensity;
+                wallPaper.pFlags.pattern = true;
+                wallPaper.pFlags.dark = oldBackground.intensity < 0 || undefined;
+              }
+            }
+
+            if(colors.length) {
+              const wallPaperSettings = newTheme.settings.wallpaper.settings;
+              wallPaperSettings.background_color = colors[0];
+              wallPaperSettings.second_background_color = colors[1];
+              wallPaperSettings.third_background_color = colors[2];
+              wallPaperSettings.fourth_background_color = colors[3];
+            }
+          });
+        } catch(err) {
+          console.error('migrating themes error', err);
         }
-      });
+      }
 
       if(migrated) {
         pushToState('settings', state.settings);
       }
     }
+
+    if(state.build < 309) {
+      state.settings.liteMode.animations = !state.settings.animationsEnabled;
+      state.settings.liteMode.video = !state.settings.autoPlay.videos;
+      state.settings.liteMode.gif = !state.settings.autoPlay.gifs;
+    }
+
+    if(state.build < 312 && typeof(state.settings.stickers.suggest) === 'boolean') {
+      state.settings.stickers.suggest = state.settings.stickers.suggest ? 'all' : 'none';
+    }
+
+    // fix typo
+    if(state.build <= 432) {
+      let changed = false;
+      try {
+        for(const theme of state.settings.themes) {
+          if(!theme.settings.highlightingColor) {
+            theme.settings.highlightingColor = (theme.settings as any).highlightningColor;
+            delete (theme.settings as any).highlightningColor;
+            changed = true;
+          }
+        }
+      } catch(err) {}
+
+      if(changed) {
+        pushToState('settings', state.settings);
+      }
+    }
+
+    state.appConfig = copy(STATE_INIT.appConfig);
 
     if(compareVersion(state.version, STATE_VERSION) !== 0) {
       newVersion = STATE_VERSION;

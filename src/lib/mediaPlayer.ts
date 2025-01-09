@@ -9,10 +9,10 @@ import {IS_APPLE_MOBILE, IS_MOBILE} from '../environment/userAgent';
 import IS_TOUCH_SUPPORTED from '../environment/touchSupport';
 import cancelEvent from '../helpers/dom/cancelEvent';
 import ListenerSetter, {Listener} from '../helpers/listenerSetter';
-import ButtonMenu from '../components/buttonMenu';
-import {ButtonMenuToggleHandler} from '../components/buttonMenuToggle';
+import {ButtonMenuItemOptionsVerifiable, ButtonMenuSync} from '../components/buttonMenu';
+import ButtonMenuToggle, {ButtonMenuToggleHandler} from '../components/buttonMenuToggle';
 import ControlsHover from '../helpers/dom/controlsHover';
-import {addFullScreenListener, cancelFullScreen, isFullScreen, requestFullScreen} from '../helpers/dom/fullScreen';
+import {addFullScreenListener, cancelFullScreen, getFullScreenElement, isFullScreen, requestFullScreen} from '../helpers/dom/fullScreen';
 import toHHMMSS from '../helpers/string/toHHMMSS';
 import MediaProgressLine from '../components/mediaProgressLine';
 import VolumeSelector from '../components/volumeSelector';
@@ -20,45 +20,190 @@ import debounce from '../helpers/schedulers/debounce';
 import overlayCounter from '../helpers/overlayCounter';
 import onMediaLoad from '../helpers/onMediaLoad';
 import {attachClickEvent} from '../helpers/dom/clickEvent';
+import safePlay from '../helpers/dom/safePlay';
+import ButtonIcon from '../components/buttonIcon';
+import Button from '../components/button';
+import Icon from '../components/icon';
+import setCurrentTime from '../helpers/dom/setCurrentTime';
+import {i18n} from './langPack';
+import {numberThousandSplitterForWatching} from '../helpers/number/numberThousandSplitter';
+import createCanvasStream from '../helpers/canvas/createCanvasStream';
+import simulateEvent from '../helpers/dom/dispatchEvent';
+import indexOfAndSplice from '../helpers/array/indexOfAndSplice';
+
+export const PlaybackRateButton = (options: {
+  onPlaybackRateMenuToggle?: (open: boolean) => void,
+  direction: string
+}) => {
+  const PLAYBACK_RATES = [0.5, 1, 1.5, 2];
+  const PLAYBACK_RATES_ICONS: Icon[] = ['playback_05', 'playback_1x', 'playback_15', 'playback_2x'];
+  const button = ButtonIcon(` btn-menu-toggle`, {noRipple: true});
+
+  const setIcon = () => {
+    const playbackRateButton = button;
+
+    let idx = PLAYBACK_RATES.indexOf(appMediaPlaybackController.playbackRate);
+    if(idx === -1) idx = PLAYBACK_RATES.indexOf(1);
+
+    const icon = Icon(PLAYBACK_RATES_ICONS[idx]);
+    if(playbackRateButton.firstElementChild) {
+      playbackRateButton.firstElementChild.replaceWith(icon);
+    } else {
+      playbackRateButton.append(icon);
+    }
+  };
+
+  const setBtnMenuToggle = () => {
+    const buttons = PLAYBACK_RATES.map((rate, idx) => {
+      const buttonOptions: Parameters<typeof ButtonMenuSync>[0]['buttons'][0] = {
+        // icon: PLAYBACK_RATES_ICONS[idx],
+        regularText: rate + 'x',
+        onClick: () => {
+          appMediaPlaybackController.playbackRate = rate;
+        }
+      };
+
+      return buttonOptions;
+    });
+    const btnMenu = ButtonMenuSync({buttons});
+    btnMenu.classList.add(options.direction, 'playback-rate-menu');
+    ButtonMenuToggleHandler({
+      el: button,
+      onOpen: options.onPlaybackRateMenuToggle ? () => {
+        options.onPlaybackRateMenuToggle(true);
+      } : undefined,
+      onClose: options.onPlaybackRateMenuToggle ? () => {
+        options.onPlaybackRateMenuToggle(false);
+      } : undefined
+    });
+    setIcon();
+    button.append(btnMenu);
+  };
+
+  const addRate = (add: number) => {
+    const playbackRate = appMediaPlaybackController.playbackRate;
+    const idx = PLAYBACK_RATES.indexOf(playbackRate);
+    const nextIdx = idx + add;
+    if(nextIdx >= 0 && nextIdx < PLAYBACK_RATES.length) {
+      appMediaPlaybackController.playbackRate = PLAYBACK_RATES[nextIdx];
+    }
+  };
+
+  const isMenuOpen = () => {
+    return button.classList.contains('menu-open');
+  };
+
+  setBtnMenuToggle();
+  return {element: button, setIcon, addRate, isMenuOpen};
+};
 
 export default class VideoPlayer extends ControlsHover {
-  private static PLAYBACK_RATES = [0.5, 1, 1.5, 2];
-  private static PLAYBACK_RATES_ICONS = ['playback_05', 'playback_1x', 'playback_15', 'playback_2x'];
-
-  protected video: HTMLVideoElement;
-  protected wrapper: HTMLDivElement;
+  public video: HTMLVideoElement;
+  protected wrapper: HTMLElement;
   protected progress: MediaProgressLine;
   protected skin: 'default';
+  protected live: boolean;
 
   protected listenerSetter: ListenerSetter;
-  protected playbackRateButton: HTMLElement;
+  protected playbackRateButton: ReturnType<typeof PlaybackRateButton>;
   protected pipButton: HTMLElement;
+  protected liveMenuButton: HTMLElement;
+  protected toggles: HTMLElement[];
+  protected mainToggle: HTMLElement;
+  protected controls: HTMLElement;
+  protected gradient: HTMLElement;
+  public liveEl: HTMLElement;
 
   /* protected videoParent: HTMLElement;
   protected videoWhichChild: number; */
 
-  protected onPlaybackRackMenuToggle?: (open: boolean) => void;
+  protected onPlaybackRateMenuToggle?: (open: boolean) => void;
   protected onPip?: (pip: boolean) => void;
   protected onPipClose?: () => void;
+  protected onVolumeChange: VolumeSelector['onVolumeChange'];
+  protected onFullScreen: (active: boolean) => void;
+  protected onFullScreenToPip: () => void;
 
-  constructor({video, play = false, streamable = false, duration, onPlaybackRackMenuToggle, onPip, onPipClose}: {
+  protected canPause: boolean;
+  protected canSeek: boolean;
+
+  protected _inPip = false;
+
+  protected _width: number;
+  protected _height: number;
+
+  protected emptyPipVideo: HTMLVideoElement;
+  protected debouncedPip: (pip: boolean) => void;
+  protected debouncePipTime: number;
+  public emptyPipVideoSource: CanvasImageSource;
+
+  protected listenKeyboardEvents: 'always' | 'fullscreen';
+  protected hadContainer: boolean;
+  protected useGlobalVolume: VolumeSelector['useGlobalVolume'];
+  public volumeSelector: VolumeSelector;
+  protected isPlaying: boolean;
+  protected shouldEnableSoundOnClick: () => boolean;
+
+  constructor({
+    video,
+    container,
+    play = false,
+    streamable = false,
+    duration,
+    live,
+    width,
+    height,
+    onPlaybackRateMenuToggle,
+    onPip,
+    onPipClose,
+    listenKeyboardEvents,
+    useGlobalVolume,
+    onVolumeChange,
+    onFullScreen,
+    onFullScreenToPip,
+    shouldEnableSoundOnClick
+  }: {
     video: HTMLVideoElement,
+    container?: HTMLElement,
     play?: boolean,
     streamable?: boolean,
     duration?: number,
-    onPlaybackRackMenuToggle?: VideoPlayer['onPlaybackRackMenuToggle'],
+    live?: boolean,
+    width?: number,
+    height?: number,
+    onPlaybackRateMenuToggle?: VideoPlayer['onPlaybackRateMenuToggle'],
     onPip?: VideoPlayer['onPip'],
-    onPipClose?: VideoPlayer['onPipClose']
+    onPipClose?: VideoPlayer['onPipClose'],
+    listenKeyboardEvents?: VideoPlayer['listenKeyboardEvents'],
+    useGlobalVolume?: VolumeSelector['useGlobalVolume'],
+    onVolumeChange?: VideoPlayer['onVolumeChange'],
+    onFullScreen?: (active: boolean) => void,
+    onFullScreenToPip?: VideoPlayer['onFullScreenToPip'],
+    shouldEnableSoundOnClick?: VideoPlayer['shouldEnableSoundOnClick']
   }) {
     super();
 
     this.video = video;
-    this.wrapper = document.createElement('div');
+    this.video.classList.add('ckin__video');
+    this.wrapper = container ?? document.createElement('div');
     this.wrapper.classList.add('ckin__player');
+    this.live = live;
+    this.canPause = !live;
+    this.canSeek = !live;
+    this._width = width;
+    this._height = height;
 
-    this.onPlaybackRackMenuToggle = onPlaybackRackMenuToggle;
+    this.onPlaybackRateMenuToggle = onPlaybackRateMenuToggle;
     this.onPip = onPip;
     this.onPipClose = onPipClose;
+    this.onVolumeChange = onVolumeChange;
+    this.onFullScreen = onFullScreen;
+    this.onFullScreenToPip = onFullScreenToPip;
+
+    this.listenKeyboardEvents = listenKeyboardEvents;
+    this.hadContainer = !!container;
+    this.useGlobalVolume = useGlobalVolume;
+    this.shouldEnableSoundOnClick = shouldEnableSoundOnClick;
 
     this.listenerSetter = new ListenerSetter();
 
@@ -66,115 +211,167 @@ export default class VideoPlayer extends ControlsHover {
       element: this.wrapper,
       listenerSetter: this.listenerSetter,
       canHideControls: () => {
-        return !this.video.paused && (!this.playbackRateButton || !this.playbackRateButton.classList.contains('menu-open'));
+        return !this.video.paused && (!this.playbackRateButton || !this.playbackRateButton.isMenuOpen());
       },
       showOnLeaveToClassName: 'media-viewer-caption',
       ignoreClickClassName: 'ckin__controls'
     });
 
-    video.parentNode.insertBefore(this.wrapper, video);
-    this.wrapper.appendChild(video);
+    if(!this.hadContainer) {
+      video.parentNode.insertBefore(this.wrapper, video);
+      this.wrapper.appendChild(video);
+    }
 
     this.skin = 'default';
 
     this.stylePlayer(duration);
-    this.setBtnMenuToggle();
 
-    if(this.skin === 'default') {
-      const controls = this.wrapper.querySelector('.default__controls.ckin__controls') as HTMLDivElement;
-      this.progress = new MediaProgressLine(video, streamable);
+    if(this.skin === 'default' && !live) {
+      const controls = this.controls = this.wrapper.querySelector('.default__controls.ckin__controls') as HTMLDivElement;
+      this.gradient = this.controls.previousElementSibling as HTMLElement;
+      this.progress = new MediaProgressLine({
+        onSeekStart: () => {
+          this.wrapper.classList.add('is-seeking');
+        },
+        onSeekEnd: () => {
+          this.wrapper.classList.remove('is-seeking');
+        }
+      });
+      this.progress.setMedia({
+        media: video,
+        streamable,
+        duration
+      });
       controls.prepend(this.progress.container);
     }
 
     if(play/*  && video.paused */) {
-      const promise = video.play();
-      promise.catch((err: Error) => {
+      video.play().catch((err: Error) => {
         if(err.name === 'NotAllowedError') {
           video.muted = true;
           video.autoplay = true;
-          video.play();
+          safePlay(video);
         }
       }).finally(() => { // due to autoplay, play will not call
-        this.wrapper.classList.toggle('is-playing', !this.video.paused);
+        this.setIsPlaing(!this.video.paused);
       });
+    } else {
+      this.setIsPlaing(!this.video.paused);
     }
   }
 
+  public get width() {
+    return this.video.videoWidth || this._width;
+  }
+
+  public get height() {
+    return this.video.videoHeight || this._height;
+  }
+
+  private setIsPlaing(isPlaying: boolean) {
+    if(this.isPlaying === isPlaying) {
+      return;
+    }
+
+    this.isPlaying = isPlaying;
+
+    if(this.live && !isPlaying) {
+      return;
+    }
+
+    this.wrapper.classList.toggle('is-playing', isPlaying);
+    this.toggles.forEach((toggle) => {
+      toggle.replaceChildren(Icon(isPlaying ? 'pause' : 'play'));
+    });
+  }
+
   private stylePlayer(initDuration: number) {
-    const {wrapper, video, skin, listenerSetter} = this;
+    const {wrapper, video, skin, listenerSetter, live} = this;
 
     wrapper.classList.add(skin);
+    if(live) wrapper.classList.add(`${skin}-live`);
 
     const html = this.buildControls();
     wrapper.insertAdjacentHTML('beforeend', html);
     let timeDuration: HTMLElement;
 
+    const onPlayCallbacks: (() => void)[] = [], onPauseCallbacks: (() => void)[] = [];
     if(skin === 'default') {
-      this.playbackRateButton = this.wrapper.querySelector('.playback-rate') as HTMLElement;
-      this.pipButton = this.wrapper.querySelector('.pip') as HTMLElement;
+      if(this.canPause) {
+        const mainToggle = this.mainToggle = Button(`${skin}__button--big toggle`, {noRipple: true, icon: 'play'});
+        wrapper.firstElementChild.after(mainToggle);
+      }
 
-      const toggle = wrapper.querySelectorAll('.toggle') as NodeListOf<HTMLElement>;
-      const fullScreenButton = wrapper.querySelector('.fullscreen') as HTMLElement;
-      const timeElapsed = wrapper.querySelector('#time-elapsed');
-      timeDuration = wrapper.querySelector('#time-duration') as HTMLElement;
-      timeDuration.textContent = toHHMMSS(video.duration | 0);
+      const leftControls = wrapper.querySelector('.left-controls') as HTMLElement;
+      if(live) {
+        this.toggles = [];
+      } else {
+        const leftToggle = ButtonIcon(` ${skin}__button toggle`, {noRipple: true});
+        leftControls.prepend(leftToggle);
+        this.toggles = [leftToggle];
+      }
 
-      const volumeSelector = new VolumeSelector(listenerSetter);
+      const rightControls = wrapper.querySelector('.right-controls') as HTMLElement;
+      if(!live) {
+        this.playbackRateButton = PlaybackRateButton({direction: 'top-left', onPlaybackRateMenuToggle: this.onPlaybackRateMenuToggle});
+        this.playbackRateButton.element.classList.add(`${skin}__button`);
+      }
+      if(!IS_MOBILE && document.pictureInPictureEnabled) {
+        this.pipButton = ButtonIcon(`pip ${skin}__button`, {noRipple: true});
+      }
+      const fullScreenButton = ButtonIcon(` ${skin}__button`, {noRipple: true});
+      rightControls.append(...[this.playbackRateButton?.element, this.pipButton, fullScreenButton].filter(Boolean));
 
-      const leftControls = wrapper.querySelector('.left-controls');
+      const timeElapsed = wrapper.querySelector('.ckin__time-elapsed');
+      timeDuration = wrapper.querySelector('.ckin__time-duration') as HTMLElement;
+
+      const volumeSelector = this.volumeSelector = new VolumeSelector({
+        listenerSetter,
+        vertical: false,
+        media: video,
+        useGlobalVolume: this.useGlobalVolume,
+        onVolumeChange: this.onVolumeChange
+      });
+
       volumeSelector.btn.classList.remove('btn-icon');
-      leftControls.insertBefore(volumeSelector.btn, timeElapsed.parentElement);
+      if(timeElapsed) {
+        timeElapsed.parentElement.before(volumeSelector.btn);
+      } else {
+        leftControls.lastElementChild.before(volumeSelector.btn);
+      }
 
-      Array.from(toggle).forEach((button) => {
+      this.toggles.forEach((button) => {
         attachClickEvent(button, () => {
           this.togglePlay();
         }, {listenerSetter: this.listenerSetter});
       });
 
       if(this.pipButton) {
-        attachClickEvent(this.pipButton, () => {
-          this.video.requestPictureInPicture();
-        }, {listenerSetter: this.listenerSetter});
+        attachClickEvent(this.pipButton, this.requestPictureInPicture, {listenerSetter: this.listenerSetter});
 
-        const onPip = (pip: boolean) => {
-          this.wrapper.style.visibility = pip ? 'hidden': '';
-          if(this.onPip) {
-            this.onPip(pip);
-          }
-        };
+        this.debouncePipTime = 20;
+        this.debouncedPip = debounce(this._onPip, this.debouncePipTime, false, true);
 
-        const debounceTime = 20;
-        const debouncedPip = debounce(onPip, debounceTime, false, true);
-
-        listenerSetter.add(video)('enterpictureinpicture', () => {
-          debouncedPip(true);
-
-          listenerSetter.add(video)('leavepictureinpicture', () => {
-            const onPause = () => {
-              clearTimeout(timeout);
-              if(this.onPipClose) {
-                this.onPipClose();
-              }
-            };
-            const listener = listenerSetter.add(video)('pause', onPause, {once: true}) as any as Listener;
-            const timeout = setTimeout(() => {
-              listenerSetter.remove(listener);
-            }, debounceTime);
-          }, {once: true});
-        });
-
-        listenerSetter.add(video)('leavepictureinpicture', () => {
-          debouncedPip(false);
-        });
+        this.addPipListeners(video);
       }
 
       if(!IS_TOUCH_SUPPORTED) {
-        attachClickEvent(video, () => {
-          this.togglePlay();
-        }, {listenerSetter: this.listenerSetter});
+        if(this.canPause) {
+          attachClickEvent(video, () => {
+            if(this.checkInteraction()) {
+              return;
+            }
 
-        listenerSetter.add(document)('keydown', (e: KeyboardEvent) => {
-          if(overlayCounter.overlaysActive > 1 || document.pictureInPictureElement === video) { // forward popup is active, etc
+            this.togglePlay();
+          }, {listenerSetter: this.listenerSetter});
+        }
+
+        if(this.listenKeyboardEvents) listenerSetter.add(document)('keydown', (e: KeyboardEvent) => {
+          if(
+            overlayCounter.overlaysActive > 1 ||
+            document.pictureInPictureElement === video ||
+            (this.listenKeyboardEvents === 'fullscreen' && !this.isFullScreen())
+          ) { // forward popup is active, etc
             return;
           }
 
@@ -185,17 +382,12 @@ export default class VideoPlayer extends ControlsHover {
             this.toggleFullScreen();
           } else if(code === 'KeyM') {
             appMediaPlaybackController.muted = !appMediaPlaybackController.muted;
-          } else if(code === 'Space') {
+          } else if(code === 'Space' && this.canPause) {
             this.togglePlay();
-          } else if(e.altKey && (code === 'Equal' || code === 'Minus')) {
+          } else if(e.altKey && (code === 'Equal' || code === 'Minus') && this.canSeek) {
             const add = code === 'Equal' ? 1 : -1;
-            const playbackRate = appMediaPlaybackController.playbackRate;
-            const idx = VideoPlayer.PLAYBACK_RATES.indexOf(playbackRate);
-            const nextIdx = idx + add;
-            if(nextIdx >= 0 && nextIdx < VideoPlayer.PLAYBACK_RATES.length) {
-              appMediaPlaybackController.playbackRate = VideoPlayer.PLAYBACK_RATES[nextIdx];
-            }
-          } else if(wrapper.classList.contains('ckin__fullscreen') && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+            this.playbackRateButton.addRate(add);
+          } else if(wrapper.classList.contains('ckin__fullscreen') && (key === 'ArrowLeft' || key === 'ArrowRight') && this.canSeek) {
             if(key === 'ArrowLeft') appMediaPlaybackController.seekBackward({action: 'seekbackward'});
             else appMediaPlaybackController.seekForward({action: 'seekforward'});
           } else {
@@ -219,116 +411,183 @@ export default class VideoPlayer extends ControlsHover {
         this.toggleFullScreen();
       }, {listenerSetter: this.listenerSetter});
 
-      addFullScreenListener(wrapper, this.onFullScreen.bind(this, fullScreenButton), listenerSetter);
+      addFullScreenListener(wrapper, () => this._onFullScreen(fullScreenButton), listenerSetter);
+      this._onFullScreen(fullScreenButton, true);
 
-      listenerSetter.add(video)('timeupdate', () => {
-        timeElapsed.textContent = toHHMMSS(video.currentTime | 0);
-      });
+      if(timeElapsed) {
+        listenerSetter.add(video)('timeupdate', () => {
+          if(!video.paused && !this.isPlaying) {
+            console.warn('video: fixing missing play event');
+            simulateEvent(video, 'play');
+          }
 
-      listenerSetter.add(video)('play', () => {
+          timeElapsed.textContent = toHHMMSS(video.currentTime | 0);
+        });
+      }
+
+      const onPlay = () => {
         wrapper.classList.add('played');
 
-        if(!IS_TOUCH_SUPPORTED) {
-          listenerSetter.add(video)('play', () => {
+        if(!IS_TOUCH_SUPPORTED && !live) {
+          onPlayCallbacks.push(() => {
             this.hideControls(true);
           });
         }
-      }, {once: true});
 
-      listenerSetter.add(video)('pause', () => {
+        indexOfAndSplice(onPlayCallbacks, onPlay);
+      };
+
+      if(this.hadContainer) {
+        onPlay();
+      }
+
+      onPlayCallbacks.push(onPlay);
+      onPauseCallbacks.push(() => {
         this.showControls(false);
       });
 
       listenerSetter.add(appMediaPlaybackController)('playbackParams', () => {
-        this.setPlaybackRateIcon();
+        this.playbackRateButton.setIcon();
       });
+
+      if(live) {
+        this.liveEl = i18n('Rtmp.MediaViewer.Live');
+        this.liveEl.classList.add('controls-live');
+        leftControls.prepend(this.liveEl);
+      }
     }
 
     listenerSetter.add(video)('play', () => {
-      wrapper.classList.add('is-playing');
+      this.setIsPlaing(true);
+      onPlayCallbacks.forEach((cb) => cb());
     });
 
     listenerSetter.add(video)('pause', () => {
-      wrapper.classList.remove('is-playing');
+      this.setIsPlaing(false);
+      onPauseCallbacks.forEach((cb) => cb());
     });
 
-    if(video.duration || initDuration) {
-      timeDuration.textContent = toHHMMSS(Math.round(video.duration || initDuration));
-    } else {
-      onMediaLoad(video).then(() => {
-        timeDuration.textContent = toHHMMSS(Math.round(video.duration));
-      });
+    if(timeDuration) {
+      if(video.duration || initDuration) {
+        timeDuration.textContent = toHHMMSS(Math.round(video.duration || initDuration));
+      } else {
+        onMediaLoad(video).then(() => {
+          timeDuration.textContent = toHHMMSS(Math.round(video.duration));
+        });
+      }
     }
   }
 
-  protected togglePlay() {
-    this.video[this.video.paused ? 'play' : 'pause']();
+  protected checkInteraction() {
+    if(this.shouldEnableSoundOnClick?.()) {
+      this.volumeSelector.setVolume({volume: 1, muted: false});
+      return true;
+    }
+
+    return false;
+  }
+
+  protected _onPip = (pip: boolean) => {
+    this._inPip = pip;
+    this.wrapper.style.visibility = pip ? 'hidden': '';
+    this.onPip?.(pip);
+  };
+
+  protected onEnterPictureInPictureLeave = (e: Event) => {
+    const onPause = () => {
+      clearTimeout(timeout);
+      this.onPipClose?.();
+    };
+    const listener = this.listenerSetter.add(e.target)('pause', onPause, {once: true}) as any as Listener;
+    const timeout = setTimeout(() => {
+      this.listenerSetter.remove(listener);
+    }, this.debouncePipTime);
+  };
+
+  protected onEnterPictureInPicture = (e: Event) => {
+    this.debouncedPip(true);
+    this.listenerSetter.add(e.target)('leavepictureinpicture', this.onEnterPictureInPictureLeave, {once: true});
+  };
+
+  protected onLeavePictureInPicture = () => {
+    this.debouncedPip(false);
+  };
+
+  protected addPipListeners(video: HTMLVideoElement) {
+    this.listenerSetter.add(video)('enterpictureinpicture', this.onEnterPictureInPicture);
+    this.listenerSetter.add(video)('leavepictureinpicture', this.onLeavePictureInPicture);
+  }
+
+  public requestPictureInPicture = async() => {
+    if(this.video.duration) {
+      if(this.isFullScreen()) {
+        this.onFullScreenToPip?.();
+      }
+
+      this.video.requestPictureInPicture();
+      this.checkInteraction();
+      return;
+    }
+
+    if(!this.emptyPipVideo) {
+      const {width, height} = this;
+      this.emptyPipVideo = document.createElement('video');
+      this.emptyPipVideo.autoplay = true;
+      this.emptyPipVideo.muted = true;
+      this.emptyPipVideo.playsInline = true;
+      this.emptyPipVideo.style.position = 'absolute';
+      this.emptyPipVideo.style.visibility = 'hidden';
+      document.body.prepend(this.emptyPipVideo);
+      this.emptyPipVideo.srcObject = createCanvasStream({width, height, image: this.emptyPipVideoSource});
+      this.addPipListeners(this.emptyPipVideo);
+    }
+
+    await onMediaLoad(this.emptyPipVideo);
+    this.emptyPipVideo.requestPictureInPicture();
+
+    onMediaLoad(this.video).then(() => {
+      if(document.pictureInPictureElement === this.emptyPipVideo) {
+        document.exitPictureInPicture();
+        this.video.requestPictureInPicture();
+      }
+    });
+  };
+
+  protected togglePlay(isPaused = this.video.paused) {
+    this.video[isPaused ? 'play' : 'pause']();
   }
 
   private buildControls() {
     const skin = this.skin;
+
     if(skin === 'default') {
+      const time = this.live ? `
+      <span class="left-controls-watching"></span>
+      ` : `
+      <time class="ckin__time-elapsed">0:00</time>
+      <span> / </span>
+      <time class="ckin__time-duration">0:00</time>
+      `
+
       return `
-      <button class="${skin}__button--big toggle tgico" title="Toggle Play"></button>
       <div class="${skin}__gradient-bottom ckin__controls"></div>
       <div class="${skin}__controls ckin__controls">
-        <div class="bottom-controls">
+        <div class="bottom-controls night">
           <div class="left-controls">
-            <button class="btn-icon ${skin}__button toggle tgico" title="Toggle Video"></button>
-            <div class="time">
-              <time id="time-elapsed">0:00</time>
-              <span> / </span>
-              <time id="time-duration">0:00</time>
+            <div class="ckin__time">
+              ${time}
             </div>
           </div>
-          <div class="right-controls">
-            <button class="btn-icon ${skin}__button btn-menu-toggle playback-rate night" title="Playback Rate"></button>
-            ${!IS_MOBILE && document.pictureInPictureEnabled ? `<button class="btn-icon ${skin}__button pip tgico-pip" title="Picture-in-Picture"></button>` : ''}
-            <button class="btn-icon ${skin}__button fullscreen tgico-fullscreen" title="Full Screen"></button>
-          </div>
+          <div class="right-controls"></div>
         </div>
       </div>`;
     }
   }
 
-  protected setBtnMenuToggle() {
-    const buttons: Parameters<typeof ButtonMenu>[0] = VideoPlayer.PLAYBACK_RATES.map((rate, idx) => {
-      return {
-        // icon: VideoPlayer.PLAYBACK_RATES_ICONS[idx],
-        regularText: rate + 'x',
-        onClick: () => {
-          appMediaPlaybackController.playbackRate = rate;
-        }
-      };
-    });
-    const btnMenu = ButtonMenu(buttons);
-    btnMenu.classList.add('top-left');
-    ButtonMenuToggleHandler(
-      this.playbackRateButton,
-      this.onPlaybackRackMenuToggle ? () => {
-        this.onPlaybackRackMenuToggle(true);
-      } : undefined,
-      undefined,
-      this.onPlaybackRackMenuToggle ? () => {
-        this.onPlaybackRackMenuToggle(false);
-      } : undefined
-    );
-    this.playbackRateButton.append(btnMenu);
-
-    this.setPlaybackRateIcon();
-  }
-
-  protected setPlaybackRateIcon() {
-    const playbackRateButton = this.playbackRateButton;
-    VideoPlayer.PLAYBACK_RATES_ICONS.forEach((className) => {
-      className = 'tgico-' + className;
-      playbackRateButton.classList.remove(className);
-    });
-
-    let idx = VideoPlayer.PLAYBACK_RATES.indexOf(appMediaPlaybackController.playbackRate);
-    if(idx === -1) idx = VideoPlayer.PLAYBACK_RATES.indexOf(1);
-
-    playbackRateButton.classList.add('tgico-' + VideoPlayer.PLAYBACK_RATES_ICONS[idx]);
+  public cancelFullScreen() {
+    if(getFullScreenElement() === this.wrapper) {
+      this.toggleFullScreen();
+    }
   }
 
   protected toggleFullScreen() {
@@ -354,6 +613,7 @@ export default class VideoPlayer extends ControlsHover {
       } */
 
       requestFullScreen(player);
+      this.checkInteraction();
     } else {
       /* if(this.videoParent) {
         const {videoWhichChild, videoParent} = this;
@@ -371,24 +631,69 @@ export default class VideoPlayer extends ControlsHover {
     }
   }
 
-  protected onFullScreen(fullScreenButton: HTMLElement) {
+  public isFullScreen() {
+    return isFullScreen();
+  }
+
+  protected _onFullScreen(fullScreenButton: HTMLElement, noEvent?: boolean) {
     const isFull = isFullScreen();
     this.wrapper.classList.toggle('ckin__fullscreen', isFull);
     if(!isFull) {
-      fullScreenButton.classList.remove('tgico-smallscreen');
-      fullScreenButton.classList.add('tgico-fullscreen');
+      fullScreenButton.replaceChildren(Icon('fullscreen'));
       fullScreenButton.setAttribute('title', 'Full Screen');
     } else {
-      fullScreenButton.classList.remove('tgico-fullscreen');
-      fullScreenButton.classList.add('tgico-smallscreen');
+      fullScreenButton.replaceChildren(Icon('smallscreen'));
       fullScreenButton.setAttribute('title', 'Exit Full Screen');
     }
+
+    !noEvent && this.onFullScreen?.(isFull);
+  }
+
+  public dimBackground() {
+    this.wrapper.classList.add('dim-background');
+  }
+
+  public setTimestamp(timestamp: number) {
+    setCurrentTime(this.video, timestamp);
+    this.togglePlay(true);
   }
 
   public cleanup() {
     super.cleanup();
     this.listenerSetter.removeAll();
-    this.progress.removeListeners();
-    this.onPlaybackRackMenuToggle = this.onPip = undefined;
+    this.progress?.removeListeners();
+    this.volumeSelector?.removeListeners();
+    this.onPlaybackRateMenuToggle =
+      this.onPip =
+      this.onVolumeChange =
+      this.onFullScreen =
+      this.onFullScreenToPip =
+      this.shouldEnableSoundOnClick =
+      undefined;
+  }
+
+  public unmount() {
+    [this.mainToggle, this.gradient, this.controls].forEach((element) => {
+      element.remove();
+    });
+  }
+
+  public setupLiveMenu(buttons: ButtonMenuItemOptionsVerifiable[]) {
+    this.liveMenuButton = ButtonMenuToggle({
+      direction: 'top-left',
+      buttons: buttons,
+      buttonOptions: {
+        noRipple: true
+      }
+    });
+    this.wrapper.querySelector('.right-controls').prepend(this.liveMenuButton);
+  }
+
+  public updateLiveViewersCount(count: number) {
+    this.wrapper.querySelector('.left-controls-watching').replaceChildren(i18n('Rtmp.Watching', [numberThousandSplitterForWatching(Math.max(1, count))]));
+  }
+
+  get inPip() {
+    return this._inPip;
   }
 }

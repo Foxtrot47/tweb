@@ -7,31 +7,54 @@
 import sequentialDom from '../sequentialDom';
 import {renderImageFromUrlPromise} from './renderImageFromUrl';
 
-export default function renderMediaWithFadeIn(
+const UNMOUNT_THUMBS = true;
+
+export default function renderMediaWithFadeIn({
+  container,
+  media,
+  url,
+  needFadeIn,
+  aspecter = container,
+  thumbImage,
+  fadeInElement = media as any,
+  onRender,
+  onRenderFinish,
+  useRenderCache
+}: {
   container: HTMLElement,
   media: Parameters<typeof renderImageFromUrlPromise>[0],
   url: string,
   needFadeIn: boolean,
-  aspecter = container,
-  thumbImage?: HTMLElement
-) {
+  aspecter?: HTMLElement,
+  thumbImage?: HTMLElement,
+  fadeInElement?: HTMLElement,
+  onRender?: () => void,
+  onRenderFinish?: () => void,
+  useRenderCache?: boolean
+}) {
   if(needFadeIn) {
-    media.classList.add('fade-in');
+    fadeInElement.classList.add('fade-in');
   }
 
-  const promise = renderImageFromUrlPromise(media, url).then(() => {
+  const promise = renderImageFromUrlPromise(media, url, useRenderCache).then(() => {
     return sequentialDom.mutateElement(container, () => {
-      aspecter.append(media);
+      aspecter?.append(media);
 
       if(needFadeIn) {
-        media.addEventListener('animationend', () => {
+        onRender?.();
+        fadeInElement.addEventListener('animationend', () => {
           sequentialDom.mutate(() => {
-            media.classList.remove('fade-in');
-            thumbImage?.remove();
+            fadeInElement.classList.remove('fade-in');
+            UNMOUNT_THUMBS && thumbImage?.remove();
+            container.classList.add('no-background');
+            onRenderFinish?.();
           });
         }, {once: true});
       } else {
-        thumbImage?.remove();
+        UNMOUNT_THUMBS && thumbImage?.remove();
+        container.classList.add('no-background');
+        onRender?.();
+        onRenderFinish?.();
       }
     });
   });

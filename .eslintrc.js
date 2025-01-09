@@ -7,19 +7,25 @@ module.exports = {
   parser: '@typescript-eslint/parser',
   parserOptions: {
     'ecmaVersion': 'latest',
-    'sourceType': 'module'
-    // project: ['./tsconfig.json']
+    'sourceType': 'module',
+    'project': ['./tsconfig.json']
   },
   plugins: [
     '@typescript-eslint'
   ],
-  // overrides: [{
-  //   files: ['*.ts', '*.ts'],
+  ignorePatterns: [
+    'src/vendor/**',
+    'src/solid/**',
+    'src/opus-recorder/**',
+    'public/**'
+  ],
+  overrides: [{
+    files: ['*.ts'],
 
-  //   parserOptions: {
-  //     project: ['./tsconfig.json'],
-  //   },
-  // }],
+    parserOptions: {
+      project: ['./tsconfig.json'],
+    },
+  }],
   rules: {
     'max-len': 'off',
     'keyword-spacing': ['error', {
@@ -33,6 +39,7 @@ module.exports = {
         switch: {after: false}
       }
     }],
+    'linebreak-style': ['error', 'unix'],
     'eol-last': 'error',
     'indent': [
       'error', 2, {
@@ -70,7 +77,7 @@ module.exports = {
     'quotes': ['error', 'single', {allowTemplateLiterals: true}],
     'space-before-blocks': ['error', 'always'],
     'spaced-comment': ['error', 'always'],
-    'prefer-spread': 'error',
+    'prefer-spread': 'off',
     'prefer-const': ['error', {destructuring: 'all'}],
     'object-curly-spacing': ['error', 'never'],
     'array-bracket-spacing': ['error', 'never'],
@@ -88,7 +95,10 @@ module.exports = {
     'no-multi-str': 'error',
     'no-new-wrappers': 'error',
     'no-irregular-whitespace': ['error', {skipStrings: true, skipComments: true, skipRegExps: true, skipTemplates: true}],
-    'no-unexpected-multiline': 'error'
+    'no-unexpected-multiline': 'error',
+    'no-return-await': 'error',
+    '@typescript-eslint/await-thenable': 'error',
+    // '@typescript-eslint/no-misused-promises': 'error'
     // '@typescript-eslint/no-misused-promises': ['error', {checksConditionals: true, checksVoidReturn: true, checksSpreads: true}]
   }
 };

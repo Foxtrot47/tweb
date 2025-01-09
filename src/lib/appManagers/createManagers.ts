@@ -45,6 +45,18 @@ import appStateManager from './appStateManager';
 import filterUnique from '../../helpers/array/filterUnique';
 import AppWebDocsManager from './appWebDocsManager';
 import AppPaymentsManager from './appPaymentsManager';
+import AppAttachMenuBotsManager from './appAttachMenuBotsManager';
+import AppSeamlessLoginManager from './appSeamlessLoginManager';
+import AppThemesManager from './appThemesManager';
+import AppUsernamesManager from './appUsernamesManager';
+import AppChatInvitesManager from './appChatInvitesManager';
+import AppStoriesManager from './appStoriesManager';
+import AppBotsManager from './appBotsManager';
+import AppBoostsManager from './appBoostsManager';
+import AppStatisticsManager from './appStatisticsManager';
+import AppBusinessManager from './appBusinessManager';
+import AppTranslationsManager from './appTranslationsManager';
+import AppGifsManager from './appGifsManager';
 
 export default function createManagers(appStoragesManager: AppStoragesManager, userId: UserId) {
   const managers = {
@@ -86,7 +98,19 @@ export default function createManagers(appStoragesManager: AppStoragesManager, u
     appStoragesManager: appStoragesManager,
     appStateManager: appStateManager,
     appWebDocsManager: new AppWebDocsManager,
-    appPaymentsManager: new AppPaymentsManager
+    appPaymentsManager: new AppPaymentsManager,
+    appAttachMenuBotsManager: new AppAttachMenuBotsManager,
+    appSeamlessLoginManager: new AppSeamlessLoginManager,
+    appThemesManager: new AppThemesManager,
+    appUsernamesManager: new AppUsernamesManager,
+    appChatInvitesManager: new AppChatInvitesManager,
+    appStoriesManager: new AppStoriesManager,
+    appBotsManager: new AppBotsManager,
+    appBoostsManager: new AppBoostsManager,
+    appStatisticsManager: new AppStatisticsManager,
+    appBusinessManager: new AppBusinessManager,
+    appTranslationsManager: new AppTranslationsManager,
+    appGifsManager: new AppGifsManager
   };
 
   type T = typeof managers;
@@ -108,7 +132,13 @@ export default function createManagers(appStoragesManager: AppStoragesManager, u
 
   const promises: Array<Promise<(() => void) | void> | void>[] = [];
   let names = Object.keys(managers) as (keyof T)[];
-  names.unshift('appUsersManager', 'appChatsManager', 'appNotificationsManager', 'appMessagesManager', 'dialogsStorage');
+  names.unshift(
+    'appUsersManager',
+    'appChatsManager',
+    'appNotificationsManager',
+    'appMessagesManager',
+    'dialogsStorage'
+  );
   names = filterUnique(names);
   for(const name of names) {
     const manager = managers[name];
@@ -129,5 +159,8 @@ export default function createManagers(appStoragesManager: AppStoragesManager, u
     managers.apiManager.setUserAuth(userId);
   }
 
-  return Promise.all(promises).then(() => managers);
+  return Promise.all(promises).then(() => {
+    managers.rootScope.dispatchEventSingle('managers_ready');
+    return managers;
+  });
 }

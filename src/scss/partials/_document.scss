@@ -38,14 +38,14 @@
     .document:not(.document-with-thumb) & {
       padding: 1.5625rem .25rem 0 .25rem;
 
-      @include respond-to(handhelds) {
-        padding: 1.5rem 0px 0px 0px;
-        font-size: 14px;
+      // @include respond-to(handhelds) {
+      //   padding: 1.5rem 0px 0px 0px;
+      //   font-size: 14px;
 
-        &:after {
-          --size: .875rem;
-        }
-      }
+      //   &:after {
+      //     --size: .875rem;
+      //   }
+      // }
     }
 
     &:after {
@@ -137,6 +137,7 @@
 
     .document-download {
       background-color: rgba(0, 0, 0, .2);
+      border-radius: $border-radius;
     }
 
     .preloader-circular {
@@ -176,10 +177,10 @@
     width: 2.5rem;
     height: 2.5rem;
 
-    @include respond-to(handhelds) {
-      width: 1.625rem;
-      height: 1.625rem;
-    }
+    // @include respond-to(handhelds) {
+    //   width: 1.625rem;
+    //   height: 1.625rem;
+    // }
   }
 
   .preloader-circular {
@@ -193,10 +194,12 @@
 
 .document, 
 .audio {
+  --padding: 0px;
   --icon-size: 3.375rem;
   --icon-margin: .875rem;
-  --padding-left: calc(var(--icon-size) + var(--icon-margin));
-  padding-left: var(--padding-left);
+  --padding-left: calc(var(--icon-size) + var(--icon-margin) + var(--padding));
+  padding: var(--padding);
+  padding-inline-start: var(--padding-left);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -208,7 +211,7 @@
   &-download {
     position: absolute;
     // left: 0;
-    margin-left: calc(var(--padding-left) * -1);
+    margin-inline-start: calc((var(--padding-left) - var(--padding)) * -1);
     width: var(--icon-size);
     height: var(--icon-size);
     color: #fff;
@@ -253,10 +256,6 @@
   &-ico {
     display: flex;
     justify-content: center;
-
-    &.tgico-largeplay:before {
-      margin-right: -1px;
-    }
   }
 
   .preloader-circular {

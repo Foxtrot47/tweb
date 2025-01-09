@@ -10,10 +10,10 @@ export default function getSelectedNodes() {
   for(let i = 0; i < selection.rangeCount; ++i) {
     const range = selection.getRangeAt(i);
     let {startContainer, endContainer} = range;
-    if(endContainer.nodeType !== 3) endContainer = endContainer.firstChild;
+    if(endContainer.nodeType !== endContainer.TEXT_NODE) endContainer = endContainer.firstChild;
 
     while(startContainer && startContainer !== endContainer) {
-      nodes.push(startContainer.nodeType === 3 ? startContainer : startContainer.firstChild);
+      nodes.push(startContainer.nodeType === endContainer.TEXT_NODE ? startContainer : startContainer.firstChild);
       startContainer = startContainer.nextSibling;
     }
 
@@ -25,3 +25,27 @@ export default function getSelectedNodes() {
   // * filter null's due to <br>
   return nodes.filter((node) => !!node);
 }
+
+// export default function getSelectedNodes() {
+//   const selection = document.getSelection();
+//   const fragment = document.createDocumentFragment();
+//   const nodeList: Node[] = [];
+
+//   for(let i = 0; i < selection.rangeCount; ++i) {
+//     fragment.append(selection.getRangeAt(i).cloneContents());
+//   }
+
+//   const walker = document.createTreeWalker(fragment);
+//   let currentNode = walker.currentNode;
+
+//   while(currentNode) {
+//     nodeList.push(currentNode);
+//     currentNode = walker.nextNode();
+//   }
+
+//   if(nodeList[0] === fragment) {
+//     nodeList.shift();
+//   }
+
+//   return nodeList;
+// }

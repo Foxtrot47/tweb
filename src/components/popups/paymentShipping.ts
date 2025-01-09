@@ -12,7 +12,7 @@ import CheckboxField from '../checkboxField';
 import CountryInputField from '../countryInputField';
 import InputField from '../inputField';
 import Row from '../row';
-import {SettingSection} from '../sidebarLeft';
+import SettingSection from '../settingSection';
 import TelInputField from '../telInputField';
 import {PaymentButton} from './payment';
 import {createCountryZipFields, handleInputFieldsOnChange, InputFieldCorrected} from './paymentCard';
@@ -25,7 +25,7 @@ export default class PopupPaymentShipping extends PopupElement<{
   finish: (o: {shippingAddress: PaymentShippingAddress, requestedInfo: PaymentsValidatedRequestedInfo}) => void
 }> {
   constructor(
-    private paymentForm: PaymentsPaymentForm,
+    private paymentForm: PaymentsPaymentForm.paymentsPaymentForm,
     private inputInvoice: InputInvoice,
     private focus?: ShippingFocusField
   ) {
@@ -108,8 +108,7 @@ export default class PopupPaymentShipping extends PopupElement<{
     });
     const saveRow = new Row({
       checkboxField: saveCheckboxField,
-      subtitleLangKey: 'PaymentShippingSaveInfo',
-      noCheckboxSubtitle: true
+      subtitleLangKey: 'PaymentShippingSaveInfo'
     });
 
     (receiverSection || addressSection).content.append(saveRow.container);

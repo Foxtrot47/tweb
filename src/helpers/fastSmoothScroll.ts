@@ -7,10 +7,10 @@
 // * Jolly Cobra's fastSmoothScroll slightly patched
 
 import {dispatchHeavyAnimationEvent} from '../hooks/useHeavyAnimationCheck';
-import {fastRaf, fastRafPromise} from './schedulers';
+import {fastRafPromise} from './schedulers';
 import {animateSingle, cancelAnimationByKey} from './animation';
-import rootScope from '../lib/rootScope';
 import isInDOM from './dom/isInDOM';
+import liteMode from './liteMode';
 
 const MIN_JS_DURATION = 250;
 const MAX_JS_DURATION = 600;
@@ -24,6 +24,7 @@ export enum FocusDirection {
 };
 
 export type ScrollGetNormalSizeCallback = (options: {rect: DOMRect}) => number;
+export type ScrollGetElementPositionCallback = (options: {elementRect: DOMRect, containerRect: DOMRect, elementPosition: number}) => number;
 export type ScrollStartCallbackDimensions = {
   scrollSize: number,
   scrollPosition: number,
@@ -32,6 +33,7 @@ export type ScrollStartCallbackDimensions = {
   duration: number,
   containerRect: DOMRect,
   elementRect: DOMRect,
+  getProgress: () => number
 };
 
 export type ScrollOptions = {
@@ -44,25 +46,29 @@ export type ScrollOptions = {
   forceDuration?: number,
   axis?: 'x' | 'y',
   getNormalSize?: ScrollGetNormalSizeCallback,
+  getElementPosition?: ScrollGetElementPositionCallback,
   fallbackToElementStartWhenCentering?: HTMLElement,
-  startCallback?: (dimensions: ScrollStartCallbackDimensions) => void
+  startCallback?: (dimensions: ScrollStartCallbackDimensions) => void,
+  transitionFunction?: (value: number) => number
 };
 
+export function fastSmoothScrollToStart(container: HTMLElement, axis: 'x') {
+  return fastSmoothScroll({
+    container: container,
+    element: container,
+    getElementPosition: () => -container.scrollLeft,
+    position: 'start',
+    axis: 'x'
+  });
+}
+
 export default function fastSmoothScroll(options: ScrollOptions) {
-  if(options.margin === undefined) {
-    options.margin = 0;
-  }
-
-  if(options.maxDistance === undefined) {
-    options.maxDistance = LONG_TRANSITION_MAX_DISTANCE;
-  }
-
-  if(options.axis === undefined) {
-    options.axis = 'y';
-  }
+  options.margin ??= 0;
+  options.maxDistance ??= LONG_TRANSITION_MAX_DISTANCE;
+  options.axis ??= 'y';
   // return;
 
-  if(!rootScope.settings.animationsEnabled) {
+  if(!liteMode.isAvailable('animations') || options.forceDuration === 0) {
     options.forceDirection = FocusDirection.Static;
   }
 
@@ -83,7 +89,7 @@ export default function fastSmoothScroll(options: ScrollOptions) {
 }
 
 function scrollWithJs(options: ScrollOptions): Promise<void> {
-  const {element, container, getNormalSize, axis, margin, position, forceDirection, maxDistance, forceDuration} = options;
+  const {element, container, getNormalSize, getElementPosition, transitionFunction, axis, margin, position, forceDirection, maxDistance, forceDuration} = options;
   if(!isInDOM(element)) {
     cancelAnimationByKey(container);
     return Promise.resolve();
@@ -93,6 +99,7 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
   const rectEndKey = axis === 'y' ? 'bottom' : 'right';
   const sizeKey = axis === 'y' ? 'height' : 'width';
   const scrollSizeKey = axis === 'y' ? 'scrollHeight' : 'scrollWidth';
+  const elementScrollSizeKey = axis === 'y' ? 'scrollHeight' : 'offsetWidth'; // can use offsetWidth for X, since it's almost same as scrollWidth
   const scrollPositionKey = axis === 'y' ? 'scrollTop' : 'scrollLeft';
 
   // const { offsetTop: elementTop, offsetHeight: elementHeight } = element;
@@ -101,8 +108,9 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
 
   // const transformable = container.firstElementChild as HTMLElement;
 
-  const elementPosition = elementRect[rectStartKey] - containerRect[rectStartKey];
-  const elementSize = element[scrollSizeKey]; // margin is exclusive in DOMRect
+  const possibleElementPosition = elementRect[rectStartKey] - containerRect[rectStartKey];
+  const elementPosition = getElementPosition ? getElementPosition({elementRect, containerRect, elementPosition: possibleElementPosition}) : possibleElementPosition;
+  const elementSize = element[elementScrollSizeKey]; // margin is exclusive in DOMRect
 
   const containerSize = getNormalSize ? getNormalSize({rect: containerRect}) : containerRect[sizeKey];
 
@@ -162,13 +170,14 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
     return Promise.resolve();
   }
 
+  let jumpToScrollPosition: number;
   if(axis === 'y') {
     if(forceDirection === undefined) {
       if(path > maxDistance) {
-        scrollPosition = container.scrollTop += path - maxDistance;
+        jumpToScrollPosition = scrollPosition += path - maxDistance;
         path = maxDistance;
       } else if(path < -maxDistance) {
-        scrollPosition = container.scrollTop += path + maxDistance;
+        jumpToScrollPosition = scrollPosition += path + maxDistance;
         path = -maxDistance;
       }
     }/*  else if(forceDirection === FocusDirection.Up) { // * not tested yet
@@ -195,7 +204,7 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
     path = Math.min(path, remainingPath);
   }
 
-  const target = container[scrollPositionKey] + path;
+  const target = scrollPosition + path;
   const absPath = Math.abs(path);
   const duration = forceDuration ?? (
     MIN_JS_DURATION + (absPath / LONG_TRANSITION_MAX_DISTANCE) * (MAX_JS_DURATION - MIN_JS_DURATION)
@@ -242,11 +251,17 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
   //transformable.style.minHeight = `${transformableHeight}px`;
   */
 
-  const transition = absPath < SHORT_TRANSITION_MAX_DISTANCE ? shortTransition : longTransition;
+  const transition = transitionFunction ?? (absPath < SHORT_TRANSITION_MAX_DISTANCE ? shortTransition : longTransition);
+  const getProgress = () => duration ? Math.min((Date.now() - startAt) / duration, 1) : 1;
   const tick = () => {
-    const t = duration ? Math.min((Date.now() - startAt) / duration, 1) : 1;
+    if(jumpToScrollPosition !== undefined) {
+      container[scrollPositionKey] = jumpToScrollPosition;
+      jumpToScrollPosition = undefined;
+    }
 
-    const currentPath = path * (1 - transition(t));
+    const t = getProgress();
+    const value = transition(t);
+    const currentPath = path * (1 - value);
     container[scrollPositionKey] = Math.round(target - currentPath);
 
     return t < 1;
@@ -285,7 +300,8 @@ function scrollWithJs(options: ScrollOptions): Promise<void> {
       path,
       duration,
       containerRect,
-      elementRect
+      elementRect,
+      getProgress
     });
   }
 
@@ -299,3 +315,5 @@ function longTransition(t: number) {
 function shortTransition(t: number) {
   return 1 - ((1 - t) ** 3.5);
 }
+
+export {shortTransition as shortScrollTransition};

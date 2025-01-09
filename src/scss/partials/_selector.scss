@@ -5,11 +5,13 @@
  */
 
 @keyframes scaleIn {
-  0% {
+  from {
+    opacity: 0;
     transform: scale(.2);
   }
 
   to {
+    opacity: 1;
     transform: scale(1);
   }
 }
@@ -42,15 +44,27 @@
 
   &-search {
     // padding: 0 1.5rem;
-    padding: 0 1rem;
+    padding-inline: 1rem;
     display: flex;
     flex-flow: wrap;
     position: relative;
+
+    &-section {
+      &-container {
+        &.is-countries {
+          .selector-user-avatar {
+            --multiplier: 1.125;
+            background: none;
+          }
+        }
+      }
+    }
 
     &-input {
       border: none;
       outline: none;
       flex: 1 1 auto;
+      line-height: 1;
     }
 
     // ! only in this container need this padding
@@ -60,77 +74,106 @@
   }
 
   &-user {
+    --selector-user-size: 2rem;
     color: var(--primary-text-color);
     background-color: var(--light-secondary-text-color);
     font-size: 1rem;
-    padding: 0 17px 0px 0px;
-    margin-left: -.25rem;
-    margin-right: .75rem;
-    height: 2rem;
-    line-height: 2rem;
+    padding-inline-end: .75rem;
+    margin-inline: -.25rem .75rem;
+    height: var(--selector-user-size);
+    line-height: var(--selector-user-size);
     margin-bottom: 7px;
     border-radius: 1.5rem;
     user-select: none;
     flex: 0 0 auto;
-    transition: .2s opacity, .2s transform, .2s background-color;
     max-width: 11.25rem;
+
+    &-alone {
+      margin: 0;
+    }
+
+    &.hover-primary {
+      @include hover() {
+        background-color: var(--light-primary-color);
+      }
+
+      .selector-user-avatar-close {
+        display: none;
+      }
+    }
 
     @include text-overflow();
 
-    body.animation-level-0 & {
-      transition: none;
+    @include animation-level(2) {
+      transform-origin: var(--transform-origin-left-center);
+      transition: .15s opacity, .15s transform, .15s background-color, .15s color;
+
+      &.scale-in {
+        animation: scaleIn .15s ease forwards;
+      }
+  
+      &.scale-out {
+        animation: scaleIn .15s ease forwards;
+        animation-direction: reverse;
+      }
     }
 
     @include hover() {
       background-color: var(--light-danger-color);
       cursor: pointer;
 
-      .selector-user-avatar:after {
+      .selector-user-avatar-close {
         opacity: 1;
         transform: scaleX(-1) rotate(-90deg);
       }
     }
 
-    body:not(.animation-level-0) & {
-      &.scale-in {
-        animation: scaleIn .15s ease forwards;
-      }
-  
-      &.scale-out {
-        animation: scaleIn .1s ease forwards;
-        animation-direction: reverse;
-      }
-    }
-
     &-avatar {
-      float: left;
-      margin-right: 8px;
-      overflow: hidden;
-      position: relative;
-      
-      html.is-safari & {
-        -webkit-mask-image: -webkit-radial-gradient(circle, white 100%, black 100%); // fix safari overflow
-      }
+      border-radius: inherit;
+      margin-top: calc((var(--selector-user-size) - var(--size)) / 2);
+      margin-left: calc((var(--selector-user-size) - var(--size)) / 2);
 
-      &:after {
+      &-close {
         position: absolute;
-        content: $tgico-close;
-        left: 0;
+        inset-inline-start: 0;
         top: 0;
         background-color: var(--danger-color);
         height: 100%;
         width: 100%;
         z-index: 2;
-        font-size: 23px;
-        line-height: 32px !important;
+        font-size: 1.375rem;
+        line-height: var(--size) !important;
         opacity: 0;
-        transition: .2s opacity, .2s transform;
         transform: scaleX(-1) rotate(0deg);
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
 
-        body.animation-level-0 & {
-          transition: none;
+        @include animation-level(2) {
+          transition: .2s opacity, .2s transform;
         }
       }
+
+      &-container {
+        float: inline-start;
+        margin-inline-end: 8px;
+        overflow: hidden;
+        position: relative;
+        border-radius: 50% !important;
+        color: #fff;
+        flex: 0 0 auto;
+        pointer-events: none;
+  
+        html.is-safari & {
+          -webkit-mask-image: -webkit-radial-gradient(circle, white 100%, black 100%); // fix safari overflow
+        }
+      }
+    }
+
+    &-title {
+      pointer-events: none;
+      @include text-overflow();
     }
   }
 
@@ -138,34 +181,36 @@
     height: 100%;
     flex: 1 1 auto;
 
-    /* .scrollable > :first-child {
-      margin-top: .5rem;
-    } */
+    .scrollable {
+      display: flex;
+      flex-direction: column;
+
+      .sidebar-left-section-container,
+      .gradient-delimiter {
+        flex: 0 0 auto;
+      }
+    }
   }
 
-  .chatlist {
-    &-chat {
-      padding-top: .75rem;
-      padding-bottom: .75rem;
+  &-list-section-container {
+    flex: 1 1 auto !important;
+    // flex: 0 0 auto;
+    // min-height: 360px;
 
-      @include respond-to(handhelds) {
-        height: 66px;
-        padding-top: 9px;
-        padding-bottom: 9px;
+    .sidebar-left-section {
+      display: flex;
+      flex-direction: column;
+
+      &,
+      .selector-list-section-content2 {
+        min-height: unquote('max(360px, 100%)');
+        // height: 1px; // fix height
       }
     }
 
-    .user-caption {
-      padding-left: .75rem;
-      padding-right: 0;
-    }
-
-    p {
-      height: 24px !important;
-    }
-    
-    span.user-last-message {
-      font-size: 14px;
+    .selector-list-section-content {
+      position: relative;
+      flex: 1 1 auto;
     }
   }
 
@@ -176,26 +221,26 @@
 
   .checkbox {
     margin-top: 11px;
-    padding-left: 11px;
+    padding-inline-start: 11px;
   }
 
-  .checkbox-field {
-    margin: 0;
-    padding: 0;
+  .checkbox-field:not(.checkbox-field-toggle) {
+    --offset-left: 0 !important;
+    pointer-events: none;
+    position: absolute !important;
+    margin: 0 !important;
+    padding: 0 !important;
     transform: translateY(-50%);
     top: 50%;
     z-index: 1;
 
     &:first-child {
-      margin-right: 1.6875rem;
-      margin-left: .6875rem;
+      margin-inline: .6875rem 1.6875rem;
     }
   }
 
   .checkbox-field-round {
-    pointer-events: none;
-    position: absolute;
-    right: 1.125rem;
+    inset-inline-end: 1.125rem;
     --size: 1.25rem;
 
     .checkbox-box-border {
@@ -205,5 +250,116 @@
     .checkbox-box-check {
       --offset: 6px;
     }
+  }
+
+  &-left {
+    .checkbox-field-round {
+      inset-inline: 1.125rem auto;
+    }
+  }
+
+  &-square {
+    $add: 3rem;
+
+    .checkbox-field {
+      inset-inline-start: 1.25rem !important;
+    }
+
+    .chatlist-chat.row-with-padding {
+      padding-inline-start: #{4.5rem + $add} !important; // 4.5 + x
+    }
+
+    .dialog-avatar {
+      margin-inline-start: #{$add} !important;
+    }
+  }
+
+  &-empty-placeholder {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    padding: 0 1rem;
+
+    &.is-full {
+      justify-content: center;
+      inset: 0;
+      transform: none;
+      background-color: var(--surface-color);
+    }
+
+    &-sticker {
+      width: 140px;
+      height: 140px;
+      position: relative;
+      margin-bottom: 1rem;
+    }
+
+    &-title {
+      font-size: var(--font-size-20);
+      font-weight: var(--font-weight-bold);
+      line-height: var(--line-height-20);
+    }
+
+    &-title,
+    &-description {
+      text-align: center;
+    }
+
+    &-description {
+      line-height: var(--line-height-16);
+      margin-top: .125rem;
+      padding-bottom: 40px;
+      color: var(--secondary-text-color);
+      @include text-overflow(false);
+    }
+
+    // .sidebar-left-section-name + & {
+    //   margin-top: 2rem;
+    // }
+  }
+
+  .dialogs-placeholder-canvas {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1;
+  }
+
+  &.is-countries {
+    .selector-countries-emoji {
+      font-size: 125%;
+    }
+
+    .row-title {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+  }
+
+  &-forum-topic {
+    font-weight: var(--font-weight-bold);
+  }
+
+  &-premium-lock {
+    border: 2px solid var(--surface-color);
+    position: absolute;
+    color: #fff;
+    font-size: 1rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    background-color: var(--premium-color);
+    border-radius: 50%;
+    text-align: center;
+    line-height: 1.25rem;
+    inset-inline-start: 2.25rem;
+    top: 2rem;
   }
 }

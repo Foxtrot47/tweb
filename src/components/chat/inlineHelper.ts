@@ -10,7 +10,6 @@ import {WebDocument} from '../../layer';
 import {MyDocument} from '../../lib/appManagers/appDocsManager';
 import LazyLoadQueue from '../lazyLoadQueue';
 import Scrollable from '../scrollable';
-import {wrapPhoto} from '../wrappers';
 import AutocompleteHelper from './autocompleteHelper';
 import AutocompleteHelperController from './autocompleteHelperController';
 import Button from '../button';
@@ -18,7 +17,7 @@ import {attachClickEvent} from '../../helpers/dom/clickEvent';
 import {MyPhoto} from '../../lib/appManagers/appPhotosManager';
 import assumeType from '../../helpers/assumeType';
 import GifsMasonry from '../gifsMasonry';
-import {SuperStickerRenderer} from '../emoticonsDropdown/tabs/stickers';
+import SuperStickerRenderer from '../emoticonsDropdown/tabs/SuperStickerRenderer';
 import mediaSizes from '../../helpers/mediaSizes';
 import readBlobAsDataURL from '../../helpers/blob/readBlobAsDataURL';
 import setInnerHTML from '../../helpers/dom/setInnerHTML';
@@ -29,6 +28,10 @@ import wrapRichText from '../../lib/richTextProcessor/wrapRichText';
 import generateQId from '../../lib/appManagers/utils/inlineBots/generateQId';
 import appDownloadManager from '../../lib/appManagers/appDownloadManager';
 import {AnimationItemGroup} from '../animationIntersector';
+import wrapPhoto from '../wrappers/photo';
+import {i18n} from '../../lib/langPack';
+import {POSTING_NOT_ALLOWED_MAP} from './input';
+import liteMode from '../../helpers/liteMode';
 
 const ANIMATION_GROUP: AnimationItemGroup = 'INLINE-HELPER';
 // const GRID_ITEMS = 5;
@@ -39,7 +42,7 @@ export default class InlineHelper extends AutocompleteHelper {
   private gifsMasonry: GifsMasonry;
   private superStickerRenderer: SuperStickerRenderer;
   private onChangeScreen: () => void;
-  public checkQuery: (peerId: PeerId, username: string, query: string) => ReturnType<InlineHelper['_checkQuery']>;
+  public checkQuery: ReturnType<typeof debounce<InlineHelper['_checkQuery']>>;
 
   constructor(
     appendTo: HTMLElement,
@@ -71,7 +74,7 @@ export default class InlineHelper extends AutocompleteHelper {
 
     this.addEventListener('visible', () => {
       setTimeout(() => { // it is not rendered yet
-        this.scrollable.container.scrollTop = 0;
+        this.scrollable.scrollPosition = 0;
       }, 0);
     });
 
@@ -85,7 +88,7 @@ export default class InlineHelper extends AutocompleteHelper {
     });
   }
 
-  public _checkQuery = async(peerId: PeerId, username: string, query: string) => {
+  public _checkQuery = async(peerId: PeerId, username: string, query: string, canSendInline: boolean) => {
     const middleware = this.controller.getMiddleware();
 
     const peer = await this.managers.appUsersManager.resolveUsername(username);
@@ -93,11 +96,28 @@ export default class InlineHelper extends AutocompleteHelper {
       throw 'PEER_CHANGED';
     }
 
-    if(peer._ !== 'user') {
+    if(peer._ !== 'user' || !peer.pFlags.bot) {
       throw 'NOT_A_BOT';
     }
 
-    const renderPromise = this.managers.appInlineBotsManager.getInlineResults(peerId, peer.id, query).then((botResults) => {
+    if(!canSendInline) {
+      if(!middleware()) {
+        throw 'PEER_CHANGED';
+      }
+
+      if(this.init) {
+        this.init();
+        this.init = null;
+      }
+
+      this.container.classList.add('cant-send');
+      this.toggle(false);
+      throw 'NO_INLINES';
+    }
+
+    const botId = peer.id;
+
+    const renderPromise = this.managers.appInlineBotsManager.getInlineResults(peerId, botId, query).then((botResults) => {
       if(!middleware()) {
         throw 'PEER_CHANGED';
       }
@@ -109,7 +129,7 @@ export default class InlineHelper extends AutocompleteHelper {
 
       const list = this.list.cloneNode() as HTMLElement;
       list.dataset.peerId = '' + peerId;
-      list.dataset.botId = '' + peer.id;
+      list.dataset.botId = '' + botId;
       list.dataset.queryId = '' + botResults.query_id;
 
       const gifsMasonry = new GifsMasonry(null, ANIMATION_GROUP, this.scrollable, false);
@@ -160,6 +180,7 @@ export default class InlineHelper extends AutocompleteHelper {
         }
 
         if(item._ === 'botInlineResult') {
+          // (preview || container).style.backgroundColor = '#ff00ff';
           if(item.thumb && item.thumb.mime_type.indexOf('image/') === 0) {
             let mediaContainer: HTMLElement;
             if(preview) {
@@ -188,7 +209,12 @@ export default class InlineHelper extends AutocompleteHelper {
                   const image = new Image();
                   image.classList.add('media-photo');
                   readBlobAsDataURL(blob).then((dataURL) => {
-                    renderMediaWithFadeIn(mediaContainer, image, dataURL, true);
+                    renderMediaWithFadeIn({
+                      container: mediaContainer,
+                      media: image,
+                      url: dataURL,
+                      needFadeIn: liteMode.isAvailable('animations')
+                    });
                   });
                 });
               }
@@ -242,27 +268,37 @@ export default class InlineHelper extends AutocompleteHelper {
 
         const parent = this.list.parentElement;
         parent.textContent = '';
-        if(botResults.switch_pm) {
-          const btnSwitchToPM = Button('btn-primary btn-secondary btn-primary-transparent primary');
-          setInnerHTML(btnSwitchToPM, wrapEmojiText(botResults.switch_pm.text));
-          attachClickEvent(btnSwitchToPM, (e) => {
-            this.chat.appImManager.setInnerPeer({peerId});
-            this.managers.appInlineBotsManager.switchToPM(peerId, peer.id, botResults.switch_pm.start_param);
+        const switchTo = botResults.switch_pm || botResults.switch_webview;
+        if(switchTo) {
+          const btnSwitchTo = Button('btn-primary btn-secondary btn-primary-transparent primary');
+          setInnerHTML(btnSwitchTo, wrapEmojiText(switchTo.text));
+          attachClickEvent(btnSwitchTo, async(e) => {
+            if(switchTo._ === 'inlineBotSwitchPM') {
+              await this.chat.appImManager.setInnerPeer({peerId});
+              this.managers.appInlineBotsManager.switchToPM(peerId, botId, switchTo.start_param);
+            } else {
+              this.chat.openWebApp({
+                botId,
+                url: switchTo.url,
+                isSimpleWebView: true,
+                buttonText: switchTo.text,
+                fromSwitchWebView: true
+              });
+            }
           });
-          parent.append(btnSwitchToPM);
+          parent.append(btnSwitchTo);
         }
         parent.append(this.list = list);
+        this.container.classList.remove('cant-send');
 
-        if(this.gifsMasonry) {
-          this.gifsMasonry.detach();
-        }
+        this.gifsMasonry?.detach();
         this.gifsMasonry = gifsMasonry;
         gifsMasonry.attach();
 
         if(!this.onChangeScreen) {
           this.onChangeScreen = () => {
             if(this.list.classList.contains('is-gallery')) {
-              const width = (this.list.childElementCount * mediaSizes.active.esgSticker.width) + (this.list.childElementCount - 1 * 1);
+              const width = (this.list.childElementCount * mediaSizes.active.popupSticker.width) + (this.list.childElementCount - 1 * 1);
               this.list.style.width = width + 'px';
             } else {
               this.list.style.width = '';
@@ -273,15 +309,15 @@ export default class InlineHelper extends AutocompleteHelper {
 
         this.onChangeScreen();
 
-        this.toggle(!botResults.results.length && !botResults.switch_pm);
-        this.scrollable.scrollTop = 0;
+        this.toggle(!botResults.results.length && !switchTo);
+        this.scrollable.scrollPosition = 0;
       });
     });
 
     return {user: peer, renderPromise};
   };
 
-  protected init() {
+  public init() {
     this.list = document.createElement('div');
     this.list.classList.add('inline-helper-results');
 
@@ -289,6 +325,14 @@ export default class InlineHelper extends AutocompleteHelper {
 
     this.scrollable = new Scrollable(this.container);
     this.lazyLoadQueue = new LazyLoadQueue();
-    this.superStickerRenderer = new SuperStickerRenderer(this.lazyLoadQueue, ANIMATION_GROUP, this.managers);
+    this.superStickerRenderer = new SuperStickerRenderer({
+      regularLazyLoadQueue: this.lazyLoadQueue,
+      group: ANIMATION_GROUP,
+      managers: this.managers
+    });
+
+    const span = i18n(POSTING_NOT_ALLOWED_MAP['send_inline']);
+    span.classList.add('inline-helper-cant-send');
+    this.container.append(span);
   }
 }

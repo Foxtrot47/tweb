@@ -9,9 +9,14 @@
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-export default function cancelEvent(event: Event) {
-  event = event || window.event;
+export default function cancelEvent(event?: Event) {
+  event ||= window.event;
   if(event) {
+    // 'input' event will have cancelable=false, but we still need to preventDefault
+    // if(!event.cancelable) {
+    //   return false;
+    // }
+
     // @ts-ignore
     event = event.originalEvent || event;
 

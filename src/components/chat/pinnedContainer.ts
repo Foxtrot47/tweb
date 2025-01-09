@@ -12,62 +12,81 @@ import ripple from '../ripple';
 import ListenerSetter from '../../helpers/listenerSetter';
 import cancelEvent from '../../helpers/dom/cancelEvent';
 import {attachClickEvent} from '../../helpers/dom/clickEvent';
-import {Message} from '../../layer';
+import {Message, StoryItem} from '../../layer';
 import safeAssign from '../../helpers/object/safeAssign';
+import ButtonIcon from '../buttonIcon';
 
 const classNames: string[] = ['is-pinned-message-shown', 'is-pinned-audio-shown'];
 const CLASSNAME_BASE = 'pinned-container';
-const HEIGHT = 52;
+
+export type WrapPinnedContainerOptions = {
+  title: string | HTMLElement | DocumentFragment,
+  subtitle?: WrapPinnedContainerOptions['title'],
+  message?: Message.message | Message.messageService,
+  storyItem?: StoryItem.storyItem
+};
 
 export default class PinnedContainer {
   public wrapperUtils: HTMLElement;
   public btnClose: HTMLElement;
+  public container: HTMLElement;
   protected wrapper: HTMLElement;
 
   protected topbar: ChatTopbar;
   protected chat: Chat;
   protected listenerSetter: ListenerSetter;
   public className: string;
-  public divAndCaption: DivAndCaption<(title: string | HTMLElement | DocumentFragment, subtitle: string | HTMLElement | DocumentFragment, message?: any) => void>;
+  public divAndCaption: DivAndCaption<(options: WrapPinnedContainerOptions) => void>;
 
   protected floating = false;
 
   public onClose?: () => void | Promise<boolean>;
+
+  public height: number;
 
   constructor(options: {
     topbar: PinnedContainer['topbar'],
     chat: PinnedContainer['chat'],
     listenerSetter: PinnedContainer['listenerSetter'],
     className: PinnedContainer['className'],
-    divAndCaption: PinnedContainer['divAndCaption'],
+    divAndCaption?: PinnedContainer['divAndCaption'],
     onClose?: PinnedContainer['onClose'],
-    floating?: PinnedContainer['floating']
+    floating?: PinnedContainer['floating'],
+    height: number
   }) {
     safeAssign(this, options);
 
     const {divAndCaption, className} = this;
-    divAndCaption.container.classList.add(CLASSNAME_BASE, 'hide');
-    divAndCaption.title.classList.add(CLASSNAME_BASE + '-title');
-    divAndCaption.subtitle.classList.add(CLASSNAME_BASE + '-subtitle');
-    divAndCaption.content.classList.add(CLASSNAME_BASE + '-content');
+    if(divAndCaption) {
+      this.container = divAndCaption.container;
+      divAndCaption.title.classList.add(CLASSNAME_BASE + '-title');
+      divAndCaption.subtitle.classList.add(CLASSNAME_BASE + '-subtitle');
+      divAndCaption.content.classList.add(CLASSNAME_BASE + '-content');
+    } else {
+      this.container = document.createElement('div');
+      this.container.classList.add('pinned-' + this.className);
+    }
 
-    this.btnClose = document.createElement('button');
-    this.btnClose.classList.add(CLASSNAME_BASE + '-close', `pinned-${className}-close`, 'btn-icon', 'tgico-close');
+    this.container.classList.add(CLASSNAME_BASE, 'hide');
+
+    this.btnClose = ButtonIcon(`close ${CLASSNAME_BASE + '-close'} pinned-${className}-close`, {noRipple: true});
 
     this.wrapper = document.createElement('div');
-    this.wrapper.classList.add(CLASSNAME_BASE + '-wrapper');
+    this.wrapper.classList.add(CLASSNAME_BASE + '-wrapper', `pinned-${className}-wrapper`);
     ripple(this.wrapper);
 
     this.wrapperUtils = document.createElement('div');
-    this.wrapperUtils.classList.add(CLASSNAME_BASE + '-wrapper-utils');
+    this.wrapperUtils.classList.add(CLASSNAME_BASE + '-wrapper-utils', `pinned-${className}-wrapper-utils`);
     this.wrapperUtils.append(this.btnClose);
 
-    this.wrapper.append(...Array.from(divAndCaption.container.children), this.wrapperUtils);
+    this.wrapper.append(...(divAndCaption ? Array.from(divAndCaption.container.children) : []), this.wrapperUtils);
 
-    divAndCaption.container.append(this.wrapper/* , this.close */);
+    divAndCaption && divAndCaption.container.append(this.wrapper/* , this.close */);
 
     this.attachOnCloseEvent(this.btnClose);
   }
+
+  public destroy() {}
 
   public attachOnCloseEvent(elem: HTMLElement) {
     attachClickEvent(elem, (e) => {
@@ -82,7 +101,7 @@ export default class PinnedContainer {
   }
 
   public toggle(hide?: boolean) {
-    const isHidden = this.divAndCaption.container.classList.contains('hide');
+    const isHidden = this.container.classList.contains('hide');
     if(hide === undefined) {
       hide = !isHidden;
     } else if(hide === isHidden) {
@@ -94,10 +113,9 @@ export default class PinnedContainer {
     const isFloating = (this.floating || mediaSizes.isMobile) && !hide;
     // const scrollTop = isFloating || this.divAndCaption.container.classList.contains('is-floating') ? scrollable.scrollTop : undefined;
 
-    this.divAndCaption.container.classList.toggle('is-floating', isFloating);
-    this.divAndCaption.container.classList.toggle('hide', hide);
+    this.container.classList.toggle('is-floating', isFloating);
+    this.container.classList.toggle('hide', hide);
 
-    this.topbar.container.classList.toggle('is-pinned-floating', isFloating);
     this.topbar.container.classList.toggle(`is-pinned-${this.className}-shown`, !hide);
 
     // const active = classNames.filter((className) => this.topbar.container.classList.contains(className));
@@ -113,17 +131,18 @@ export default class PinnedContainer {
   }
 
   public isVisible() {
-    return !this.divAndCaption.container.classList.contains('hide');
+    return !this.container.classList.contains('hide');
   }
 
   public isFloating() {
-    return this.divAndCaption.container.classList.contains('is-floating');
+    return this.container.classList.contains('is-floating');
   }
 
-  public fill(title: string | HTMLElement | DocumentFragment, subtitle: string | HTMLElement | DocumentFragment, message: Message.message) {
-    this.divAndCaption.container.dataset.peerId = '' + message.peerId;
-    this.divAndCaption.container.dataset.mid = '' + message.mid;
-    this.divAndCaption.fill(title, subtitle, message);
+  public fill(options: WrapPinnedContainerOptions) {
+    const {message} = options;
+    this.container.dataset.peerId = '' + message.peerId;
+    this.container.dataset.mid = '' + message.mid;
+    this.divAndCaption.fill(options);
     this.topbar.setUtilsWidth();
   }
 }

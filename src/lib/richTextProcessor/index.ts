@@ -67,10 +67,11 @@ export const URL_REG_EXP = URL_PROTOCOL_REG_EXP_PART +
   // resource path
   '(?:/(?:\\S{0,255}[^\\s.;,(\\[\\]{}<>"\'])?)?';
 export const URL_PROTOCOL_REG_EXP = new RegExp('^' + URL_PROTOCOL_REG_EXP_PART.slice(0, -1), 'i');
-export const URL_ANY_PROTOCOL_REG_EXP = /^((?:[^\/]+?):\/\/|mailto:)/;
 export const USERNAME_REG_EXP = '[a-zA-Z\\d_]{5,32}';
+// export const TIMESTAMP_REG_EXP = '(?:\\s|^)((?:\\d{1,2}:)?(?:[0-5]?[0-9]):(?:[0-5][0-9]))(?:\\s|$)';
+export const TIMESTAMP_REG_EXP = '(?:\\s|^)((?:(\\d{1,2}):(?:[0-5]?[0-9])|(?:\\d{1,2}|\\d{3,})):(?:[0-5][0-9]))(?:\\s|$)';
 export const BOT_COMMAND_REG_EXP = '\\/([a-zA-Z\\d_]{1,32})(?:@(' + USERNAME_REG_EXP + '))?(\\b|$)';
-export const FULL_REG_EXP = new RegExp('(^| )(@)(' + USERNAME_REG_EXP + ')|(' + URL_REG_EXP + ')|(\\n)|(' + emojiRegExp + ')|(^|[\\s\\(\\]])(#[' + ALPHA_NUMERIC_REG_EXP + ']{2,64})|(^|\\s)' + BOT_COMMAND_REG_EXP, 'i');
+export const FULL_REG_EXP = new RegExp('(^| )(@)(' + USERNAME_REG_EXP + ')|(' + URL_REG_EXP + ')|(\\n)|(' + emojiRegExp + ')|(^|[\\s\\(\\]])(#[' + ALPHA_NUMERIC_REG_EXP + ']{2,64})|(^|\\s)' + BOT_COMMAND_REG_EXP + '|' + TIMESTAMP_REG_EXP + '', 'i');
 export const EMAIL_REG_EXP = /^(([^<>()[\]\\.,;:\s@\"]+(\.[^<>()[\]\\.,;:\s@\"]+)*)|(\".+\"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
 // const markdownTestRegExp = /[`_*@~]/;
 export const MARKDOWN_REG_EXP = /(^|\s|\n)(````?)([\s\S]+?)(````?)([\s\n\.,:?!;]|$)|(^|\s|\x01)(`|~~|\*\*|__|_-_|\|\|)([^\n]+?)\7([\x01\s\.,:?!;]|$)|@(\d+)\s*\((.+?)\)|(\[(.+?)\]\((.+?)\))/m;
@@ -98,16 +99,27 @@ export const MARKDOWN_ENTITIES: {[markdown: string]: MessageEntity['_']} = {
   '||': 'messageEntitySpoiler'
 };
 
+export const MARKDOWN_ENTITIES_TYPES = new Set(Object.values(MARKDOWN_ENTITIES));
+
 export const PASS_CONFLICTING_ENTITIES: Set<MessageEntity['_']> = new Set([
   'messageEntityEmoji',
   'messageEntityLinebreak',
   'messageEntityCaret'
 ]);
+export const PASS_SINGLE_CONFLICTING_ENTITIES = new Set(PASS_CONFLICTING_ENTITIES);
 for(const i in MARKDOWN_ENTITIES) {
   PASS_CONFLICTING_ENTITIES.add(MARKDOWN_ENTITIES[i]);
 }
 
 export const PHONE_NUMBER_REG_EXP = /^\+\d+$/;
+
+export const LOCAL_ENTITIES = new Set<MessageEntity['_']>([
+  'messageEntityLinebreak',
+  'messageEntityCaret',
+  'messageEntityHighlight',
+  'messageEntityBotCommand',
+  'messageEntityTimestamp'
+]);
 
 /* export function parseEmojis(text: string) {
   return text.replace(/:([a-z0-9\-\+\*_]+?):/gi, function (all, shortcut) {

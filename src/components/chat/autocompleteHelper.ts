@@ -12,6 +12,7 @@ import appNavigationController, {NavigationItem} from '../appNavigationControlle
 import SetTransition from '../singleTransition';
 import AutocompleteHelperController from './autocompleteHelperController';
 import safeAssign from '../../helpers/object/safeAssign';
+import liteMode from '../../helpers/liteMode';
 
 export default class AutocompleteHelper extends EventListenerBase<{
   hidden: () => void,
@@ -51,21 +52,19 @@ export default class AutocompleteHelper extends EventListenerBase<{
 
     this.attachNavigation();
 
-    this.controller && this.controller.addHelper(this);
+    this.controller?.addHelper(this);
   }
 
   public toggleListNavigation(enabled: boolean) {
     if(enabled) {
-      this.attach && this.attach();
+      this.attach?.();
     } else {
-      this.detach && this.detach();
+      this.detach?.();
     }
   }
 
   protected onVisible = () => {
-    if(this.detach) { // it can be so because 'visible' calls before animation's end
-      this.detach();
-    }
+    this.detach?.(); // it can be so because 'visible' calls before animation's end
 
     const list = this.list;
     const {attach, detach, resetTarget} = attachListNavigation({
@@ -97,7 +96,7 @@ export default class AutocompleteHelper extends EventListenerBase<{
       this.attach = undefined;
       this.detach = undefined;
 
-      list.innerHTML = '';
+      list.replaceChildren();
       detach();
 
       if(this.navigationItem) {
@@ -143,9 +142,7 @@ export default class AutocompleteHelper extends EventListenerBase<{
         this.controller.hideOtherHelpers();
       }
 
-      if(this.detach) { // force detach here
-        this.detach();
-      }
+      this.detach?.(); // force detach here
     }
 
     const useRafs = this.controller || hide ? 0 : 2;
@@ -154,15 +151,15 @@ export default class AutocompleteHelper extends EventListenerBase<{
       this.dispatchEvent('hiding');
     }
 
-    SetTransition(
-      this.container,
-      'is-visible',
-      !hide,
-      rootScope.settings.animationsEnabled && !skipAnimation ? 300 : 0,
-      () => {
+    SetTransition({
+      element: this.container,
+      className: 'is-visible',
+      forwards: !hide,
+      duration: liteMode.isAvailable('animations') && !skipAnimation ? 300 : 0,
+      onTransitionEnd: () => {
         this.hidden && this.dispatchEvent('hidden');
       },
       useRafs
-    );
+    });
   }
 }

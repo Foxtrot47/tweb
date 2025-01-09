@@ -24,6 +24,8 @@ poll-element {
   .poll {
     &-title {
       font-weight: var(--font-weight-bold);
+      white-space: pre-wrap;
+      @include text-overflow(false);
   
       @include respond-to(handhelds) {
         max-width: 88%;
@@ -79,6 +81,7 @@ poll-element {
     &-avatars {
       display: flex;
       margin-left: 18px;
+      cursor: pointer;
     }
 
     &-avatar {
@@ -109,7 +112,7 @@ poll-element {
         margin-top: 7px;
         font-size: 14px;
         margin-left: -9px;
-        text-align: right;
+        text-align: end;
         width: 40px;
       }
 
@@ -128,12 +131,7 @@ poll-element {
         display: flex;
         align-items: center;
         justify-content: center;
-
-        &:before {
-          content: $tgico-check;
-          //margin-left: 1px;
-          font-weight: var(--font-weight-bold);
-        }
+        font-weight: var(--font-weight-bold);
       }
 
       @include hover() {
@@ -251,14 +249,10 @@ poll-element {
         }
 
         .poll-answer-selected {
+          color: #fff !important;
           background: var(--danger-color);
           //line-height: 16px;
-
-          &:before {
-            content: $tgico-close;
-            font-size: 12px;
-            //margin-left: 2.5px;
-          }
+          font-size: 12px;
         }
       }
     }

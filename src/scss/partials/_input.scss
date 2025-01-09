@@ -12,10 +12,18 @@
 .input-field {
   --height: 54px;
   --border-radius: #{$border-radius-medium};
+  // --padding: calc((var(--height) - var(--border-width) * 2 - var(--line-height)) / 2);
+  --padding: 1rem;
+  --padding-horizontal: 1rem;
+  --border-width: 1px;
   position: relative;
+  display: flex;
+  align-items: center;
 
   @include respond-to(handhelds) {
     --height: 50px;
+    --padding: .9375rem;
+    --padding-horizontal: .9375rem;
   }
   
   .arrow-down {
@@ -40,21 +48,19 @@
     
     margin-top: -9px;
     transform: rotate(45deg);
-    -webkit-transform: rotate(45deg);
     transition: .2s all;
   }
-  
+
   label {
     position: absolute;
     color: $placeholder-color;
     top: 0;
-    left: 1rem;
-    right: auto;
+    inset-inline: var(--padding-horizontal) auto;
     z-index: 2;
     height: 1.5rem;
     transform: translate(0, 0);
     background-color: var(--surface-color);
-    transform-origin: left center;
+    transform-origin: var(--transform-origin-left-center);
     pointer-events: none;
     margin-top: calc((var(--height) - 1.5rem) / 2); // * Center of first line
     user-select: none;
@@ -95,9 +101,6 @@
   }
   
   &-input {
-    --padding: 1rem;
-    --padding-horizontal: 1rem;
-    --border-width: 1px;
     border: var(--border-width) solid var(--input-search-border-color);
     border-radius: var(--border-radius);
     background-color: var(--surface-color);
@@ -131,11 +134,6 @@
       font-family: "Roboto", -apple-system, apple color emoji, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif !important;
       font-size: 1rem !important;
       color: var(--primary-text-color) !important;
-    }
-
-    @include respond-to(handhelds) {
-      --padding: .9375rem;
-      --padding-horizontal: .9375rem;
     }
 
     @include animation-level(0) {
@@ -202,13 +200,13 @@
     /* &.error, &.valid {
       transition: .2s border-width;
     } */
-    
+
     &:focus ~ .arrow-down {
       margin-top: -4px;
       transform: rotate(225deg);
       border-color: var(--primary-color);
     }
-    
+
     &:focus ~ label {
       color: var(--primary-color);
       font-weight: var(--font-weight-bold);
@@ -223,14 +221,18 @@
     &:not(:empty):focus ~ label {
       transition-delay: 0s, 0s, 0s, 0s;
     } */
-    
-    &:focus ~ label, 
-    &:valid ~ label, 
-    &:not(:empty) ~ label, 
+
+    &:focus ~ label,
+    &:valid ~ label,
+    &:not(.is-empty) ~ label,
     &:disabled ~ label {
-      transform: translate(-.1875rem, calc(var(--height) / -2 + .0625rem)) scale(.75);
+      transform: translate(calc(-.1875rem + (1rem - var(--padding-horizontal))), calc(var(--height) / -2 + .0625rem)) scale(.75);
       padding: 0 .3125rem;
       opacity: 1;
+    }
+
+    &:not(:focus).is-empty ~ .input-field-placeholder ~ label {
+      opacity: 0;
     }
   }
 
@@ -239,14 +241,55 @@
     pointer-events: none;
     position: absolute !important;
     top: 0;
-    left: 0;
 
     // * override scrollable styles
     bottom: auto!important;
-    right: auto!important;
+    left: var(--imc-padding-horizontal) !important;
+    right: var(--imc-padding-horizontal)!important;
+    width: auto !important;
     height: auto!important;
 
     z-index: -3;
+  }
+
+  & &-input[contenteditable="false"] {
+    opacity: var(--disabled-opacity);
+    pointer-events: none;
+  }
+
+  &-placeholder {
+    color: #a2acb4;
+    display: block; /* For Firefox By Ariel Flesler */
+    pointer-events: none;
+    position: absolute;
+    opacity: 0;
+    max-width: 100%;
+    padding-inline-end: 0.5rem;
+    inset-inline-start: var(--padding-horizontal);
+    z-index: 1;
+    @include text-overflow(true);
+
+    @include animation-level(2) {
+      transform: translateX(calc(1rem * var(--reflect)));
+      transition: opacity var(--input-placeholder-transition) .01s, transform var(--input-placeholder-transition) .01s;
+    }
+
+    &.is-empty {
+      opacity: 1;
+
+      @include animation-level(2) {
+        transform: translateX(0);
+      }
+    }
+  }
+
+  &-right-label {
+    position: absolute;
+    inset-inline-end: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 1;
+    color: var(--secondary-text-color);
   }
 }
 
@@ -256,15 +299,13 @@
   .input-field {
     flex: 1 1 auto;
     width: 1%; // fix width because of contenteditable
-
-    // &:not(:first-child) {
-    //   margin-left: 1rem;
-    // }
   }
 }
 
-.input-wrapper > * + * {
-  margin-top: 1.5rem;
+.input-wrapper {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: 100%;
 }
 
 ::placeholder { /* Chrome, Firefox, Opera, Safari 10.1+ */
@@ -280,7 +321,8 @@
   color: #909192;
 }
 
-input:focus, button:focus {
+input:focus,
+button:focus {
   outline: none;
 }
 
@@ -319,31 +361,97 @@ input:focus, button:focus {
 }
 
 .input-search {
+  --border-width: 1px;
+  --height: 42px;
+  --border-radius: 22px;
+  --icon-left-add-offset: 0rem;
+  --icon-left-offset: calc(.8125rem + var(--icon-left-add-offset));
+  --icon-size: 1.5rem;
+  --padding-horizontal: calc(var(--height) + 3px + var(--icon-left-add-offset) - var(--border-width));
   position: relative;
   width: 100%;
-  //Vozmojno nado budet vernut margin-left: 22px;, tak kak eto vrode v levom bare tak po verstke, a v pravom bare dlya mobili nado 16, gde stiker seti 
-  margin-left: .4375rem;
-  margin-right: .4375rem;
+  margin-inline: .4375rem;
   overflow: hidden;
-  --border-radius: 22px;
+  display: flex;
+  align-items: center;
 
   @include respond-to(handhelds) {
-    margin-left: 1rem;
+    margin-inline-start: 1rem;
+  }
+
+  @keyframes grow-input {
+    from {
+      transform: scale(.5);
+      opacity: 0;
+    }
+
+    to {
+      transform: scale(1);
+      opacity: var(--max-opacity, 1);
+    }
+  }
+
+  @keyframes hide-input {
+    from {
+      transform: scale(1);
+      opacity: var(--max-opacity, 1);
+    }
+
+    to {
+      transform: scale(.5);
+      opacity: 0;
+    }
+  }
+
+  .will-animate {
+    @include animation-level(2) {
+      animation: grow-input .25s forwards ease-in-out;
+    }
+
+    &.is-hiding {
+      @include animation-level(2) {
+        animation: hide-input .25s forwards ease-in-out;
+      }
+
+      @include animation-level(0) {
+        opacity: 0;
+      }
+    }
+  }
+
+  &.show-placeholder &-placeholder {
+    display: block !important;
+  }
+
+  &.old-style &-input {
+    background-color: var(--old-input-background-color);
+    border-color: transparent;
+  }
+
+  &-placeholder {
+    position: absolute;
+    color: $placeholder-color;
+    z-index: 1;
+    white-space: nowrap;
+    inset-inline-start: calc(var(--padding-horizontal) + var(--border-width));
+    pointer-events: none;
+    transform-origin: left center;
   }
 
   &-input {
-    --height: 42px;
+    --border-width: inherit;
+    --padding-horizontal: inherit;
     background-color: var(--input-search-background-color);
-    padding: 0px calc(var(--height) + 3px - var(--border-width));
+    padding: 0px var(--padding-horizontal);
     height: var(--height);
     min-height: var(--height) !important;
     max-height: var(--height) !important;
     //line-height: calc(var(--height) + 2px - var(--border-width) * 2);
     border-color: var(--input-search-border-color);
-    line-height: var(--height);
+    line-height: var(--line-height-16);
     
     @include animation-level(2) {
-      transition: /* background-color .2s ease-in-out,  */border-color .2s ease-in-out;
+      transition: background-color .2s ease-in-out, border-color .2s ease-in-out;
     }
 
     @include hover() {
@@ -353,16 +461,22 @@ input:focus, button:focus {
       }
     }
 
-    &:focus {
+    &.with-focus-effect:focus {
       background-color: transparent;
       border-color: var(--primary-color);
 
-      & ~ .tgico {
+      & ~ .input-search-part {
+        --max-opacity: 1;
         color: var(--primary-color);
-        opacity: 1;
       }
 
-      & ~ .btn-icon {
+      & ~ .preloader-container {
+        .preloader-path-new {
+          stroke: var(--primary-color);
+        }
+      }
+
+      & ~ .input-search-button {
         @include hover-background-effect(primary);
       }
     }
@@ -371,57 +485,76 @@ input:focus, button:focus {
       color: #909192 !important;
     } */
 
-    /* &:empty ~ .tgico-close,  */&:placeholder-shown ~ .tgico-close {
+    &.is-empty ~ .input-search-clear:not(.always-visible),
+    &:not(.is-empty) ~ .input-search-placeholder {
       display: none;
     }
   }
 
-  > .tgico {
+  &.is-picked .input-search-placeholder {
+    display: none;
+  }
+
+  .input-search-part {
+    --max-opacity: .6;
     position: absolute;
-    top: 50%;
-    transform: translate(0, -50%);
+    // top: 50%;
+    // transform: translate(0, -50%);
     text-align: center;
-    font-size: 24px;
+    font-size: var(--icon-size);
     color: var(--secondary-text-color);
-    opacity: .6;
+    opacity: var(--max-opacity);
     line-height: 1;
     z-index: 1;
-    
+
     @include animation-level(2) {
       transition: opacity .2s ease-out, color .2s ease-out;
     }
   }
 
-  > .tgico-search {
-    width: 24px;
-    height: 24px;
-    left: .8125rem;
+  &-icon,
+  .preloader-container {
+    width: var(--icon-size);
+    height: var(--icon-size);
+    inset-inline-start: var(--icon-left-offset);
     pointer-events: none;
   }
 
-  > .tgico-close {
-    right: 0px;
+  .preloader-container {
+    right: auto;
     z-index: 1;
-    width: 42px;
-    height: 42px;
 
-    &:before { // ! я сгорел, почему-то здесь иконка сдвигается на пиксель влево, и это происходит из-за position: absolute на .tgico ...
-      margin-right: -1px;
+    .preloader-path-new {
+      stroke: var(--secondary-color);
+
+      @include animation-level(2) {
+        transition: stroke .2s ease-out !important;
+      }
     }
+  }
+
+  &-clear {
+    inset-inline-end: calc((var(--height) - 2.25rem) / 2);
+    z-index: 1;
+  }
+
+  &-button {
+    padding: .375rem !important;
   }
 }
 
 .input-field-password {
   .input-field-input {
-    padding-right: 2.5rem;
+    padding-inline-end: 2.5rem;
     max-height: var(--height);
-    
+
     &[type="password"] {
       font-size: 2.25rem;
       padding-left: calc(.875rem - var(--border-width));
       line-height: 1;
       padding-top: 0;
       padding-bottom: 0;
+      font-family: Arial, Helvetica, sans-serif; // roboto is weird here, can't make them centered
   
       @media (-webkit-min-device-pixel-ratio: 2) { 
         font-size: 1.75rem;
@@ -449,15 +582,7 @@ input:focus, button:focus {
     justify-content: center;
     top: 50%;
     transform: translateY(-50%);
-  
-    &:before {
-      content: $tgico-eye1;
-    }
-  
-    &.eye-hidden:before {
-      content: $tgico-eye2;
-    }
-    
+
     @include hover() {
       color: var(--primary-text-color);
     }

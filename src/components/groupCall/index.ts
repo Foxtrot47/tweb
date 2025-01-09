@@ -9,9 +9,6 @@ import {hexToRgb} from '../../helpers/color';
 import {attachClickEvent} from '../../helpers/dom/clickEvent';
 import customProperties from '../../helpers/dom/customProperties';
 import {GroupCall, GroupCallParticipant} from '../../layer';
-import type {AppChatsManager} from '../../lib/appManagers/appChatsManager';
-import type {AppGroupCallsManager} from '../../lib/appManagers/appGroupCallsManager';
-import type {AppPeersManager} from '../../lib/appManagers/appPeersManager';
 import GROUP_CALL_STATE from '../../lib/calls/groupCallState';
 import {RLottieColor} from '../../lib/rlottie/rlottiePlayer';
 import rootScope from '../../lib/rootScope';
@@ -33,9 +30,7 @@ import GroupCallInstance from '../../lib/calls/groupCallInstance';
 import makeButton from '../call/button';
 import MovablePanel from '../../helpers/movablePanel';
 import findUpClassName from '../../helpers/dom/findUpClassName';
-import safeAssign from '../../helpers/object/safeAssign';
 import toggleClassName from '../../helpers/toggleClassName';
-import {AppManagers} from '../../lib/appManagers/managers';
 import themeController from '../../helpers/themeController';
 import groupCallsController from '../../lib/calls/groupCallsController';
 
@@ -373,7 +368,7 @@ export default class PopupGroupCall extends PopupElement {
     };
 
     if(await this.managers.appChatsManager.hasRights(this.instance.chatId, 'manage_call')) {
-      new PopupPeer('popup-end-video-chat', {
+      PopupElement.createPopup(PopupPeer, 'popup-end-video-chat', {
         titleLangKey: 'VoiceChat.End.Title',
         descriptionLangKey: 'VoiceChat.End.Text',
         checkboxes: [{
@@ -381,7 +376,7 @@ export default class PopupGroupCall extends PopupElement {
         }],
         buttons: [{
           langKey: 'VoiceChat.End.OK',
-          callback: (checkboxes) => {
+          callback: (e, checkboxes) => {
             hangUp(!!checkboxes.size);
           },
           isDanger: true
@@ -409,7 +404,7 @@ export default class PopupGroupCall extends PopupElement {
     this.btnClose.classList.toggle('hide', isFull);
 
     if(isFull !== wasFullScreen) {
-      animationIntersector.checkAnimations(isFull);
+      animationIntersector.checkAnimations2(isFull);
 
       themeController.setThemeColor(isFull ? '#000000' : undefined);
     }

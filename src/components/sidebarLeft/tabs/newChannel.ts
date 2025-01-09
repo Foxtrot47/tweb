@@ -4,7 +4,7 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import appSidebarLeft, {SettingSection} from '..';
+import appSidebarLeft from '..';
 import {InputFile} from '../../../layer';
 import InputField from '../../inputField';
 import {SliderSuperTab} from '../../slider';
@@ -14,6 +14,7 @@ import {_i18n} from '../../../lib/langPack';
 import ButtonCorner from '../../buttonCorner';
 import appImManager from '../../../lib/appManagers/appImManager';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
+import SettingSection from '../../settingSection';
 
 export default class AppNewChannelTab extends SliderSuperTab {
   private uploadAvatar: () => Promise<InputFile> = null;
@@ -23,7 +24,7 @@ export default class AppNewChannelTab extends SliderSuperTab {
   private nextBtn: HTMLButtonElement;
   private avatarEdit: AvatarEdit;
 
-  protected init() {
+  public init() {
     this.container.classList.add('new-channel-container');
     this.setTitle('NewChannel');
 
@@ -45,10 +46,14 @@ export default class AppNewChannelTab extends SliderSuperTab {
 
     this.channelDescriptionInputField = new InputField({
       label: 'DescriptionOptionalPlaceholder',
-      maxLength: 255
+      maxLength: 255,
+      withLinebreaks: true
     });
 
-    inputWrapper.append(this.channelNameInputField.container, this.channelDescriptionInputField.container);
+    inputWrapper.append(
+      this.channelNameInputField.container,
+      this.channelDescriptionInputField.container
+    );
 
     const onLengthChange = () => {
       this.nextBtn.classList.toggle('is-visible', !!this.channelNameInputField.value.length &&

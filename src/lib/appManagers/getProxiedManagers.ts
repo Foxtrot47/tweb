@@ -5,11 +5,13 @@
  */
 
 import type createManagers from './createManagers';
+import type {AckedResult} from '../mtproto/superMessagePort';
 import {ModifyFunctionsToAsync} from '../../types';
 import apiManagerProxy from '../mtproto/mtprotoworker';
-import {AckedResult} from '../mtproto/superMessagePort';
-import noop from '../../helpers/noop';
+import DEBUG from '../../config/debug';
 import dT from '../../helpers/dT';
+import noop from '../../helpers/noop';
+import copy from '../../helpers/object/copy';
 
 // let stats: {
 //   [manager: string]: {
@@ -34,8 +36,8 @@ import dT from '../../helpers/dT';
 
 //   const key2 = [('00000' + sentCount).slice(-5), key].join('-');
 
-//   let byManager = stats[manager] ??= {};
-//   let byMethod = byManager[method] ??= {times: [], byArgs: {}};
+//   const byManager = stats[manager] ??= {};
+//   const byMethod = byManager[method] ??= {times: [], byArgs: {}};
 
 //   const perf = performance.now();
 //   promise.catch(noop).finally(() => {
@@ -52,11 +54,29 @@ import dT from '../../helpers/dT';
 // }
 
 // setInterval(() => {
-//   // console.log(dT(), '[PROXY] stats', stats, sentCount, sentMethods, sentMethods2);
+//   console.log(
+//     dT(),
+//     '[PROXY] stats',
+//     ...[
+//       stats,
+//       sentCount,
+//       sentMethods,
+//       sentMethods2
+//     ].map(copy),
+//     Object.entries(sentMethods).sort((a, b) => b[1] - a[1])
+//   );
 //   sentCount = 0;
+//   stats = {};
 //   sentMethods = {};
 //   sentMethods2 = {};
 // }, 2000);
+
+const DEBUG_MANAGER_REQUESTS: {[managerName: string]: Set<string>} = {
+  // appProfileManager: new Set(['getProfile', 'getProfileByPeerId'])
+  // appPeersManager: new Set(['getPeer'])
+  // appChatsManager: new Set(['getChat'])
+  // appMessagesManager: new Set(['getMessageByPeer', 'getGroupsFirstMessage'])
+};
 
 function createProxy(/* source: T,  */name: string, ack?: boolean) {
   const proxy = new Proxy({}, {
@@ -74,6 +94,12 @@ function createProxy(/* source: T,  */name: string, ack?: boolean) {
           method: p as string,
           args
         }, ack as any);
+
+        if(DEBUG) {
+          if(DEBUG_MANAGER_REQUESTS[name]?.has(p as any)) {
+            console.warn('manager request', name, p, args, ack);
+          }
+        }
 
         // collectStats(name, p as string, args, promise);
 
@@ -93,27 +119,30 @@ type AA<T> = {
 };
 
 type T = Awaited<ReturnType<typeof createManagers>>;
-export default function getProxiedManagers() {
-  let proxied: {
-    [name in keyof T]?: ModifyFunctionsToAsync<T[name]>;
-  } & {
-    acknowledged?: {
-      [name in keyof T]?: AA<T[name]>;
-    }
-  };
+type ProxiedManagers = {
+  [name in keyof T]?: ModifyFunctionsToAsync<T[name]>;
+} & {
+  acknowledged?: {
+    [name in keyof T]?: AA<T[name]>;
+  }
+};
 
-  function createProxyProxy(proxied: any, ack?: boolean) {
-    return new Proxy(proxied, {
-      get: (target, p, receiver) => {
-        // @ts-ignore
-        return target[p] ??= createProxy(p as string, ack);
-      }
-    });
+function createProxyProxy(proxied: any, ack?: boolean) {
+  return new Proxy(proxied, {
+    get: (target, p, receiver) => {
+      // @ts-ignore
+      return target[p] ??= createProxy(p as string, ack);
+    }
+  });
+}
+
+let proxied: ProxiedManagers;
+export default function getProxiedManagers() {
+  if(proxied) {
+    return proxied;
   }
 
   proxied = createProxyProxy({}, false);
-
   proxied.acknowledged = createProxyProxy({}, true);
-
   return proxied;
 }

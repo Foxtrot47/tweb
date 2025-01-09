@@ -4,28 +4,35 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import AvatarElement from '../avatar';
 import PopupElement, {addCancelButton, PopupButton, PopupOptions} from '.';
 import {i18n, LangPackKey} from '../../lib/langPack';
 import CheckboxField, {CheckboxFieldOptions} from '../checkboxField';
 import setInnerHTML from '../../helpers/dom/setInnerHTML';
+import wrapEmojiText from '../../lib/richTextProcessor/wrapEmojiText';
+import {avatarNew} from '../avatarNew';
+import toggleDisability from '../../helpers/dom/toggleDisability';
+import rootScope from '../../lib/rootScope';
+import InputField from '../inputField';
 
-export type PopupPeerButton = Omit<PopupButton, 'callback'> & Partial<{callback: PopupPeerButtonCallback}>;
+export type PopupPeerButton = Omit<PopupButton, 'callback'> & Partial<{callback: PopupPeerButtonCallback, onlyWithCheckbox: PopupPeerCheckboxOptions}>;
 export type PopupPeerButtonCallbackCheckboxes = Set<LangPackKey>;
-export type PopupPeerButtonCallback = (checkboxes?: PopupPeerButtonCallbackCheckboxes) => void;
+export type PopupPeerButtonCallback = (e: MouseEvent, checkboxes?: PopupPeerButtonCallbackCheckboxes) => void;
 export type PopupPeerCheckboxOptions = CheckboxFieldOptions & {checkboxField?: CheckboxField};
 
 export type PopupPeerOptions = Omit<PopupOptions, 'buttons' | 'title'> & Partial<{
   peerId: PeerId,
-  title: string | HTMLElement,
+  threadId: number,
+  title: string | HTMLElement | DocumentFragment,
   titleLangKey: LangPackKey,
   titleLangArgs: any[],
   noTitle: boolean,
-  description: string | DocumentFragment,
+  description: Parameters<typeof setInnerHTML>[1] | true,
+  descriptionRaw: string,
   descriptionLangKey: LangPackKey,
   descriptionLangArgs: any[],
   buttons: Array<PopupPeerButton>,
-  checkboxes: Array<PopupPeerCheckboxOptions>
+  checkboxes: Array<PopupPeerCheckboxOptions>,
+  inputField: InputField
 }>;
 export default class PopupPeer extends PopupElement {
   protected description: HTMLParagraphElement;
@@ -39,31 +46,40 @@ export default class PopupPeer extends PopupElement {
     });
 
     if(options.peerId) {
-      const avatarEl = new AvatarElement();
-      avatarEl.classList.add('avatar-32');
-      avatarEl.updateWithOptions({
+      const isSavedDialog = !!(options.peerId === rootScope.myId && options.threadId);
+      const {node} = avatarNew({
+        middleware: this.middlewareHelper.get(),
+        size: 32,
         isDialog: true,
-        peerId: options.peerId
+        peerId: isSavedDialog ? options.threadId : options.peerId,
+        threadId: isSavedDialog ? undefined : options.threadId,
+        meAsNotes: isSavedDialog
       });
-      this.header.prepend(avatarEl);
+      this.header.prepend(node);
     }
 
     if(!options.noTitle) {
-      if(options.titleLangKey || !options.title) this.title.append(i18n(options.titleLangKey || 'AppName', options.titleLangArgs));
-      else if(options.title instanceof HTMLElement) {
+      if(options.titleLangKey || !options.title) {
+        this.title.append(i18n(options.titleLangKey || 'AppName', options.titleLangArgs));
+      } else if(options.title instanceof HTMLElement || options.title instanceof DocumentFragment) {
         this.title.append(options.title);
       } else this.title.innerText = options.title || '';
     }
 
     const fragment = document.createDocumentFragment();
 
-    if(options.descriptionLangKey || options.description) {
+    if(options.descriptionLangKey || options.description || options.descriptionRaw) {
       const p = this.description = document.createElement('p');
       p.classList.add('popup-description');
       if(options.descriptionLangKey) p.append(i18n(options.descriptionLangKey, options.descriptionLangArgs));
-      else if(options.description) setInnerHTML(p, options.description);
+      else if(options.description && options.description !== true) setInnerHTML(p, options.description);
+      else if(options.descriptionRaw) p.append(wrapEmojiText(options.descriptionRaw));
 
       fragment.append(p);
+    }
+
+    if(options.inputField) {
+      fragment.append(options.inputField.container);
     }
 
     if(options.checkboxes) {
@@ -79,19 +95,35 @@ export default class PopupPeer extends PopupElement {
       options.buttons.forEach((button) => {
         if(button.callback) {
           const original = button.callback;
-          button.callback = () => {
+          button.callback = (e) => {
             const c: Set<LangPackKey> = new Set();
             options.checkboxes.forEach((o) => {
               if(o.checkboxField.checked) {
                 c.add(o.text);
               }
             });
-            original(c);
+            original(e, c);
           };
+        }
+
+        const checkbox = button.onlyWithCheckbox;
+        if(checkbox) {
+          const onChange = () => {
+            toggleDisability([button.element], !checkbox.checkboxField.checked);
+          };
+          this.listenerSetter.add(checkbox.checkboxField.input)('change', onChange);
+          onChange();
         }
       });
     }
 
-    this.container.insertBefore(fragment, this.header.nextElementSibling);
+    if(options.inputField) {
+      const button = options.buttons.find((button) => !button.isCancel);
+      this.listenerSetter.add(options.inputField.input)('input', () => {
+        toggleDisability([button.element], !options.inputField.isValid());
+      });
+    }
+
+    this.header.after(fragment);
   }
 }

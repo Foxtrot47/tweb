@@ -4,18 +4,38 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import wrapEmojiText from './wrapEmojiText';
+import {MessageEntity} from '../../layer';
+import getEmojiEntityFromEmoji from './getEmojiEntityFromEmoji';
+import emojiRegExp from '../../vendor/emoji/regex';
 
-export default function getAbbreviation(str: string, onlyFirst = false) {
-  if(!str) return '';
-  const splitted = str.trim().split(' ');
-  if(!splitted[0]) return '';
+const EMOJI_REG_EXP = new RegExp(`(^${emojiRegExp})`);
 
-  const first = [...splitted[0]][0];
+export default function getAbbreviation(str: string, onlyFirst = false): {
+  text: string,
+  entities: MessageEntity[]
+} {
+  const splitted = (str || '').trim().split(' ');
+  if(!splitted[0]) return {text: '', entities: []};
 
-  if(onlyFirst || splitted.length === 1) return wrapEmojiText(first);
+  const entities: MessageEntity.messageEntityEmoji[] = [];
 
-  const last = [...splitted[splitted.length - 1]][0];
+  const firstEmojiMatch = splitted[0].match(EMOJI_REG_EXP);
+  const first = firstEmojiMatch?.[0] || splitted[0][0];
+  if(firstEmojiMatch) {
+    entities.push(getEmojiEntityFromEmoji(first));
+  }
 
-  return wrapEmojiText(first + last);
+  const length = splitted.length;
+  if(onlyFirst || length === 1) return {text: first, entities};
+
+  const lastEmojiMatch = splitted[length - 1].match(EMOJI_REG_EXP);
+  const last = lastEmojiMatch?.[0] || splitted[length - 1][0];
+  if(lastEmojiMatch) {
+    entities.push({
+      ...getEmojiEntityFromEmoji(last),
+      offset: first.length
+    });
+  }
+
+  return {text: first + last, entities};
 }

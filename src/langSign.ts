@@ -3,14 +3,14 @@ const lang = {
   'Login.PhoneLabel': 'Phone Number',
   'Login.PhoneLabelInvalid': 'Phone Number Invalid',
   'Login.KeepSigned': 'Keep me signed in',
-  'Login.StartText': 'Please confirm your country and\nenter your phone number.',
+  'Login.StartText': 'Please confirm your country code\nand enter your phone number.',
   'Login.Code.SentSms': 'We have sent you an SMS\nwith the code.',
   'Login.Code.SentInApp': 'We have sent you a message in Telegram\nwith the code.',
-  'Login.Code.SentCall': 'We will call you and voice\nthe code.',
+  'Login.Code.SentCall': 'We will call you and dictate\nthe code.',
   'Login.Code.SentUnknown': 'Please check everything\nfor a code (type: %s)',
   'Login.Password.Title': 'Enter Your Password',
   'Login.Password.Subtitle': 'Your account is protected with\nan additional password',
-  'Login.Register.Subtitle': 'Enter your name and add\na profile picture',
+  'Login.Register.Subtitle': 'Enter your name and add\na profile photo',
   'PleaseWait': 'Please wait...',
 
   // * android
@@ -32,6 +32,7 @@ const lang = {
   'Login.QR.Help3': 'Point your phone at this screen to confirm login',
   'Login.QR.Cancel': 'Log in by phone Number',
   'Login.QR.Login': 'Log in by QR Code',
+  'PhoneNumber.Code.Fragment.Info': 'Get the code in the Anonymous Numbers section on [Fragment](%1$@)',
   'PHONE_CODE_INVALID': 'Invalid code',
   'PHONE_CODE_EXPIRED': 'Code expired',
   'PASSWORD_HASH_INVALID': 'Incorrect password'

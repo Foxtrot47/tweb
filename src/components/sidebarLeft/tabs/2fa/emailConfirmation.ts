@@ -4,7 +4,6 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {SettingSection} from '../..';
 import {AccountPassword} from '../../../../layer';
 import Button from '../../../button';
 import {SliderSuperTab} from '../../../slider';
@@ -18,6 +17,7 @@ import {attachClickEvent} from '../../../../helpers/dom/clickEvent';
 import replaceContent from '../../../../helpers/dom/replaceContent';
 import toggleDisability from '../../../../helpers/dom/toggleDisability';
 import wrapStickerEmoji from '../../../wrappers/stickerEmoji';
+import SettingSection from '../../../settingSection';
 
 export default class AppTwoStepVerificationEmailConfirmationTab extends SliderSuperTab {
   public codeInputField: CodeInputField;
@@ -26,7 +26,7 @@ export default class AppTwoStepVerificationEmailConfirmationTab extends SliderSu
   public length: number;
   public isFirst = false;
 
-  protected init() {
+  public init() {
     this.container.classList.add('two-step-verification', 'two-step-verification-email-confirmation');
     this.setTitle('TwoStepAuth.RecoveryTitle');
 
@@ -125,7 +125,7 @@ export default class AppTwoStepVerificationEmailConfirmationTab extends SliderSu
 
     inputContent.append(inputWrapper);
 
-    this.scrollable.container.append(section.container);
+    this.scrollable.append(section.container);
   }
 
   onOpenAfterTimeout() {

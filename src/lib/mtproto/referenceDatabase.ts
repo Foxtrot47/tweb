@@ -4,14 +4,30 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import {Photo} from '../../layer';
+import type {Photo, StoryItem, WallPaper} from '../../layer';
 import {logger} from '../logger';
 import bytesToHex from '../../helpers/bytes/bytesToHex';
 import deepEqual from '../../helpers/object/deepEqual';
 import {AppManager} from '../appManagers/manager';
 import makeError from '../../helpers/makeError';
 
-export type ReferenceContext = ReferenceContext.referenceContextProfilePhoto | ReferenceContext.referenceContextMessage | ReferenceContext.referenceContextEmojiesSounds | ReferenceContext.referenceContextReactions | ReferenceContext.referenceContextUserFull | ReferenceContext.referenceContextCustomEmoji;
+export type ReferenceContext =
+  ReferenceContext.referenceContextProfilePhoto |
+  ReferenceContext.referenceContextMessage |
+  ReferenceContext.referenceContextEmojiesSounds |
+  ReferenceContext.referenceContextReactions |
+  ReferenceContext.referenceContextUserFull |
+  ReferenceContext.referenceContextCustomEmoji |
+  ReferenceContext.referenceContextAttachMenuBotIcon |
+  ReferenceContext.referenceContextWallPaper |
+  ReferenceContext.referenceContextStoryItem |
+  ReferenceContext.referenceContextPremiumPromo |
+  ReferenceContext.referenceContextWebPage |
+  ReferenceContext.referenceContextBotApp |
+  ReferenceContext.referenceContextChatInvite |
+  ReferenceContext.referenceContextEffects |
+  ReferenceContext.referenceContextStarsTransaction;
+
 export namespace ReferenceContext {
   export type referenceContextProfilePhoto = {
     type: 'profilePhoto',
@@ -40,6 +56,52 @@ export namespace ReferenceContext {
   export type referenceContextCustomEmoji = {
     type: 'customEmoji',
     docId: DocId
+  };
+
+  export type referenceContextAttachMenuBotIcon = {
+    type: 'attachMenuBotIcon',
+    botId: BotId
+  };
+
+  export type referenceContextWallPaper = {
+    type: 'wallPaper',
+    wallPaperId: WallPaper['id']
+  };
+
+  export type referenceContextStoryItem = {
+    type: 'storyItem',
+    peerId: PeerId,
+    storyId: StoryItem['id'],
+  };
+
+  export type referenceContextPremiumPromo = {
+    type: 'premiumPromo'
+  };
+
+  export type referenceContextWebPage = {
+    type: 'webPage',
+    url: string
+  };
+
+  export type referenceContextBotApp = {
+    type: 'botApp',
+    botId: BotId,
+    appName: string
+  };
+
+  export type referenceContextChatInvite = {
+    type: 'chatInvite',
+    hash: string
+  };
+
+  export type referenceContextEffects = {
+    type: 'effects'
+  };
+
+  export type referenceContextStarsTransaction = {
+    type: 'starsTransaction',
+    peerId: PeerId,
+    mid: number
   };
 }
 
@@ -111,6 +173,7 @@ export class ReferenceDatabase extends AppManager {
           contexts.delete(_context);
           if(!contexts.size) {
             this.contexts.delete(reference);
+            this.apiFileManager.cancelDownloadByReference(reference);
             delete this.links[bytesToHex(reference)];
           }
           return true;
@@ -136,7 +199,7 @@ export class ReferenceDatabase extends AppManager {
     let promise: Promise<any>;
     switch(context?.type) {
       case 'message': {
-        promise = this.appMessagesManager.wrapSingleMessage(context.peerId, context.messageId, true);
+        promise = this.appMessagesManager.reloadMessages(context.peerId, context.messageId, true);
         break;
         // .then(() => {
         //   console.log('FILE_REFERENCE_EXPIRED: got message', context, appMessagesManager.getMessage((context as ReferenceContext.referenceContextMessage).messageId).media, reference);
@@ -157,6 +220,47 @@ export class ReferenceDatabase extends AppManager {
 
       case 'customEmoji': {
         promise = this.appEmojiManager.getCustomEmojiDocuments([context.docId]);
+        break;
+      }
+
+      case 'attachMenuBotIcon': {
+        promise = this.appAttachMenuBotsManager.getAttachMenuBot(context.botId, true) as any;
+        break;
+      }
+
+      case 'wallPaper': {
+        promise = this.appThemesManager.getWallPaperById(context.wallPaperId);
+        break;
+      }
+
+      case 'storyItem': {
+        promise = Promise.resolve(this.appStoriesManager.getStoryById(context.peerId, context.storyId, true));
+        break;
+      }
+
+      case 'premiumPromo': {
+        promise = Promise.resolve(this.appPaymentsManager.getPremiumPromo(true));
+        break;
+      }
+
+      case 'webPage': {
+        promise = Promise.resolve(this.appWebPagesManager.getWebPage(context.url));
+        break;
+      }
+
+      case 'botApp': {
+        promise = Promise.resolve(this.appAttachMenuBotsManager.getBotApp(context.botId, context.appName));
+        break;
+      }
+
+      case 'chatInvite': {
+        promise = Promise.resolve(this.appChatInvitesManager.checkChatInvite(context.hash));
+        break;
+      }
+
+      case 'effects': {
+        promise = Promise.resolve(this.appReactionsManager.getAvailableEffects(true));
+        break;
       }
 
       default: {

@@ -4,20 +4,15 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import EventListenerBase from '../helpers/eventListenerBase';
+import EventListenerBase, {EventListenerListeners} from '../helpers/eventListenerBase';
 import ListenerSetter from '../helpers/listenerSetter';
+import {getMiddleware, MiddlewareHelper} from '../helpers/middleware';
+import noop from '../helpers/noop';
 import {AppManagers} from '../lib/appManagers/managers';
 import {i18n, LangPackKey} from '../lib/langPack';
 import ButtonIcon from './buttonIcon';
 import Scrollable from './scrollable';
 import SidebarSlider from './slider';
-
-export interface SliderTab {
-  onOpen?: () => void,
-  onOpenAfterTimeout?: () => void,
-  onClose?: () => void,
-  onCloseAfterTimeout?: () => void
-}
 
 export interface SliderSuperTabConstructable<T extends SliderSuperTab = any> {
   new(slider: SidebarSlider, destroyable: boolean): T;
@@ -27,7 +22,9 @@ export interface SliderSuperTabEventableConstructable {
   new(slider: SidebarSlider, destroyable: boolean): SliderSuperTabEventable;
 }
 
-export default class SliderSuperTab implements SliderTab {
+export default class SliderSuperTab {
+  public static getInitArgs?(...args: any[]): any;
+
   public container: HTMLElement;
 
   public header: HTMLElement;
@@ -42,6 +39,9 @@ export default class SliderSuperTab implements SliderTab {
   public listenerSetter: ListenerSetter;
 
   public managers: AppManagers;
+  public middlewareHelper: MiddlewareHelper;
+
+  public isConfirmationNeededOnClose: () => void | boolean | Promise<any>; // should return boolean instantly or `Promise` from `confirmationPopup`
 
   constructor(slider: SidebarSlider, destroyable?: boolean) {
     this._constructor(slider, destroyable);
@@ -49,6 +49,7 @@ export default class SliderSuperTab implements SliderTab {
 
   public _constructor(slider: SidebarSlider, destroyable = true): any {
     this.slider = slider;
+    this.middlewareHelper = slider ? slider.getMiddleware().create() : getMiddleware();
     this.destroyable = destroyable;
 
     this.container = document.createElement('div');
@@ -68,12 +69,11 @@ export default class SliderSuperTab implements SliderTab {
     this.content.classList.add('sidebar-content');
 
     this.scrollable = new Scrollable(this.content, undefined, undefined, true);
+    this.scrollable.attachBorderListeners(this.container);
 
     this.container.append(this.header, this.content);
 
-    if(this.slider) {
-      this.slider.addTab(this);
-    }
+    this.slider?.addTab(this);
 
     this.listenerSetter = new ListenerSetter();
   }
@@ -82,10 +82,10 @@ export default class SliderSuperTab implements SliderTab {
     return this.slider.closeTab(this);
   }
 
-  public async open(...args: any[]) {
+  public async open(...args: Parameters<typeof this['init']>) {
     if(this.init) {
       try {
-        const result = this.init();
+        const result = this.init(...args);
         this.init = null;
 
         if(result instanceof Promise) {
@@ -99,37 +99,51 @@ export default class SliderSuperTab implements SliderTab {
     this.slider.selectTab(this);
   }
 
-  protected init(): Promise<any> | any {
+  public init(...args: any[]): Promise<any> | any {
 
   }
 
-  public onCloseAfterTimeout() {
+  protected onOpen() {}
+  protected onOpenAfterTimeout() {}
+  protected onClose() {}
+
+  protected onCloseAfterTimeout() {
     if(this.destroyable) { // ! WARNING, пока что это будет работать только с самой последней внутренней вкладкой !
-      this.slider.tabs.delete(this);
+      this.slider?.deleteTab(this);
       this.container.remove();
       this.scrollable.destroy();
       this.listenerSetter?.removeAll();
+      this.middlewareHelper?.destroy();
     }
   }
 
   protected setTitle(key: LangPackKey) {
-    this.title.innerHTML = '';
-    this.title.append(i18n(key));
+    this.title.replaceChildren(i18n(key));
   }
 }
 
-export class SliderSuperTabEventable extends SliderSuperTab {
+export class SliderSuperTabEventable<T extends EventListenerListeners = {}> extends SliderSuperTab {
   public eventListener: EventListenerBase<{
-    destroy: () => void
-  }>;
+    destroy: () => void | Promise<any>,
+    destroyAfter: (promise: Promise<void>) => void,
+    close: () => void
+  } & T>;
 
   constructor(slider: SidebarSlider) {
     super(slider);
     this.eventListener = new EventListenerBase();
   }
 
+  onClose() {
+    // @ts-ignore
+    this.eventListener.dispatchEvent('close');
+  }
+
   onCloseAfterTimeout() {
-    this.eventListener.dispatchEvent('destroy');
+    // @ts-ignore
+    const results = this.eventListener.dispatchResultableEvent('destroy');
+    // @ts-ignore
+    this.eventListener.dispatchEvent('destroyAfter', Promise.all(results).then(noop, noop));
     this.eventListener.cleanup();
     return super.onCloseAfterTimeout();
   }

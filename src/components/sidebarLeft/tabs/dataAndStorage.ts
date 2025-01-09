@@ -5,7 +5,6 @@
  */
 
 import {AutoDownloadPeerTypeSettings, STATE_INIT} from '../../../config/state';
-import {SettingSection} from '..';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
 import replaceContent from '../../../helpers/dom/replaceContent';
 import toggleDisability from '../../../helpers/dom/toggleDisability';
@@ -22,7 +21,8 @@ import {SliderSuperTabEventable, SliderSuperTabEventableConstructable} from '../
 import AppAutoDownloadFileTab from './autoDownload/file';
 import AppAutoDownloadPhotoTab from './autoDownload/photo';
 import AppAutoDownloadVideoTab from './autoDownload/video';
-import apiManagerProxy from '../../../lib/mtproto/mtprotoworker';
+import SettingSection from '../../settingSection';
+import {joinDeepPath} from '../../../helpers/object/setDeepProperty';
 
 const AUTO_DOWNLOAD_FOR_KEYS: {[k in keyof AutoDownloadPeerTypeSettings]: LangPackKey} = {
   contacts: 'AutoDownloadContacts',
@@ -32,36 +32,38 @@ const AUTO_DOWNLOAD_FOR_KEYS: {[k in keyof AutoDownloadPeerTypeSettings]: LangPa
 };
 
 export default class AppDataAndStorageTab extends SliderSuperTabEventable {
-  protected async init() {
-    this.header.classList.add('with-border');
+  public init() {
     this.setTitle('DataSettings');
 
     {
       const section = new SettingSection({name: 'AutomaticMediaDownload', caption: 'AutoDownloadAudioInfo'});
 
-      const state = await apiManagerProxy.getState();
-
       const autoCheckboxField = new CheckboxField({
         text: 'AutoDownloadMedia',
         name: 'auto',
-        checked: !state.settings.autoDownloadNew.pFlags.disabled,
-        withRipple: true
+        checked: !rootScope.settings.autoDownloadNew.pFlags.disabled,
+        listenerSetter: this.listenerSetter
+      });
+
+      const autoRow = new Row({
+        checkboxField: autoCheckboxField,
+        listenerSetter: this.listenerSetter
       });
 
       const onChange = () => {
         toggleDisability([resetButton],
-          deepEqual(state.settings.autoDownload, STATE_INIT.settings.autoDownload) &&
-          deepEqual(state.settings.autoDownloadNew, STATE_INIT.settings.autoDownloadNew));
+          deepEqual(rootScope.settings.autoDownload, STATE_INIT.settings.autoDownload) &&
+          deepEqual(rootScope.settings.autoDownloadNew, STATE_INIT.settings.autoDownloadNew));
       };
 
       const setSubtitles = () => {
-        this.setAutoDownloadSubtitle(photoRow, state.settings.autoDownload.photo /* state.settings.autoDownloadNew.photo_size_max */);
-        this.setAutoDownloadSubtitle(videoRow, state.settings.autoDownload.video/* , state.settings.autoDownloadNew.video_size_max */);
-        this.setAutoDownloadSubtitle(fileRow, state.settings.autoDownload.file, state.settings.autoDownloadNew.file_size_max);
+        this.setAutoDownloadSubtitle(photoRow, rootScope.settings.autoDownload.photo /* state.settings.autoDownloadNew.photo_size_max */);
+        this.setAutoDownloadSubtitle(videoRow, rootScope.settings.autoDownload.video/* , state.settings.autoDownloadNew.video_size_max */);
+        this.setAutoDownloadSubtitle(fileRow, rootScope.settings.autoDownload.file, rootScope.settings.autoDownloadNew.file_size_max);
       };
 
       const openTab = (tabConstructor: SliderSuperTabEventableConstructable) => {
-        const tab = new tabConstructor(this.slider, true);
+        const tab = this.slider.createTab(tabConstructor);
         tab.open();
 
         this.listenerSetter.add(tab.eventListener)('destroy', () => {
@@ -109,28 +111,29 @@ export default class AppDataAndStorageTab extends SliderSuperTabEventable {
           const settings = rootScope.settings;
           settings.autoDownloadNew = copy(STATE_INIT.settings.autoDownloadNew);
           settings.autoDownload = copy(STATE_INIT.settings.autoDownload);
+          rootScope.settings = settings;
           this.managers.appStateManager.setByKey('settings', settings);
 
           setSubtitles();
-          autoCheckboxField.checked = !state.settings.autoDownloadNew.pFlags.disabled;
+          autoCheckboxField.checked = !rootScope.settings.autoDownloadNew.pFlags.disabled;
         });
       });
 
       const onDisabledChange = () => {
         const disabled = !autoCheckboxField.checked;
 
-        const settings = rootScope.settings;
+        const autoDownloadNew = rootScope.settings.autoDownloadNew;
         if(disabled) {
-          settings.autoDownloadNew.pFlags.disabled = true;
+          autoDownloadNew.pFlags.disabled = true;
         } else {
-          delete settings.autoDownloadNew.pFlags.disabled;
+          delete autoDownloadNew.pFlags.disabled;
         }
 
         [photoRow, videoRow, fileRow].forEach((row) => {
           row.container.classList.toggle('is-disabled', disabled);
         });
 
-        this.managers.appStateManager.setByKey('settings', settings);
+        this.managers.appStateManager.setByKey(joinDeepPath('settings', 'autoDownloadNew'), autoDownloadNew);
 
         onChange();
       };
@@ -140,35 +143,12 @@ export default class AppDataAndStorageTab extends SliderSuperTabEventable {
       setSubtitles();
 
       section.content.append(
-        autoCheckboxField.label,
+        autoRow.container,
         photoRow.container,
         videoRow.container,
         fileRow.container,
         resetButton
       );
-
-      this.scrollable.append(section.container);
-    }
-
-    {
-      const section = new SettingSection({name: 'AutoplayMedia'});
-
-      const gifsCheckboxField = new CheckboxField({
-        text: 'AutoplayGIF',
-        name: 'gifs',
-        stateKey: 'settings.autoPlay.gifs',
-        withRipple: true,
-        listenerSetter: this.listenerSetter
-      });
-      const videosCheckboxField = new CheckboxField({
-        text: 'AutoplayVideo',
-        name: 'videos',
-        stateKey: 'settings.autoPlay.videos',
-        withRipple: true,
-        listenerSetter: this.listenerSetter
-      });
-
-      section.content.append(gifsCheckboxField.label, videosCheckboxField.label);
 
       this.scrollable.append(section.container);
     }

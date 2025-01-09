@@ -8,36 +8,73 @@ import InputField from '../../inputField';
 import {SliderSuperTab} from '../../slider';
 import EditPeer from '../../editPeer';
 import {UsernameInputField} from '../../usernameInputField';
-import {i18n, i18n_} from '../../../lib/langPack';
+import {i18n, i18n_, LangPackKey} from '../../../lib/langPack';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
 import rootScope from '../../../lib/rootScope';
-import {generateSection, SettingSection} from '..';
+import setBlankToAnchor from '../../../lib/richTextProcessor/setBlankToAnchor';
+import getPeerEditableUsername from '../../../lib/appManagers/utils/peers/getPeerEditableUsername';
+import SettingSection, {generateSection} from '../../settingSection';
+import UsernamesSection from '../../usernamesSection';
 
 // TODO: аватарка не поменяется в этой вкладке после изменения почему-то (если поставить в другом клиенте, и потом тут проверить, для этого ещё вышел в чатлист)
+
+export function purchaseUsernameCaption() {
+  const p = document.createElement('div');
+  const FRAGMENT_USERNAME_URL = 'https://fragment.com/username/';
+  const a = setBlankToAnchor(document.createElement('a'));
+  const purchaseText = i18n('Username.Purchase', [a]);
+  purchaseText.classList.add('username-purchase-help');
+  p.append(
+    purchaseText,
+    document.createElement('br'),
+    document.createElement('br')
+  );
+  p.classList.add('hide');
+
+  return {
+    element: p,
+    setUsername: (username: string) => {
+      if(username) {
+        a.href = FRAGMENT_USERNAME_URL + username;
+      }
+
+      p.classList.toggle('hide', !username);
+    }
+  };
+}
 
 export default class AppEditProfileTab extends SliderSuperTab {
   private firstNameInputField: InputField;
   private lastNameInputField: InputField;
   private bioInputField: InputField;
-  private usernameInputField: InputField;
+  private usernameInputField: UsernameInputField;
 
-  private profileUrlContainer: HTMLDivElement;
-  private profileUrlAnchor: HTMLAnchorElement;
+  // private profileUrlContainer: HTMLDivElement;
+  // private profileUrlAnchor: HTMLAnchorElement;
 
   private editPeer: EditPeer;
 
-  protected async init() {
+  public static getInitArgs() {
+    return {
+      bioMaxLength: rootScope.managers.apiManager.getLimit('bio'),
+      user: rootScope.managers.appUsersManager.getSelf(),
+      userFull: rootScope.managers.appProfileManager.getProfile(rootScope.myId.toUserId())
+    };
+  }
+
+  public async init(p: ReturnType<typeof AppEditProfileTab['getInitArgs']> = AppEditProfileTab.getInitArgs()) {
     this.container.classList.add('edit-profile-container');
     this.setTitle('EditAccount.Title');
 
     const inputFields: InputField[] = [];
+
+    const [bioMaxLength, user, userFull] = await Promise.all([p.bioMaxLength, p.user, p.userFull]);
 
     {
       const section = generateSection(this.scrollable, undefined, 'Bio.Description');
       const inputWrapper = document.createElement('div');
       inputWrapper.classList.add('input-wrapper');
 
-      const appConfig = await this.managers.apiManager.getAppConfig();
       this.firstNameInputField = new InputField({
         label: 'EditProfile.FirstNameLabel',
         name: 'first-name',
@@ -51,21 +88,26 @@ export default class AppEditProfileTab extends SliderSuperTab {
       this.bioInputField = new InputField({
         label: 'EditProfile.BioLabel',
         name: 'bio',
-        maxLength: rootScope.premium ? appConfig.about_length_limit_premium : appConfig.about_length_limit_default
+        maxLength: bioMaxLength
       });
 
-      inputWrapper.append(this.firstNameInputField.container, this.lastNameInputField.container, this.bioInputField.container);
+      inputWrapper.append(
+        this.firstNameInputField.container,
+        this.lastNameInputField.container,
+        this.bioInputField.container
+      );
 
-      const caption = document.createElement('div');
-      caption.classList.add('caption');
-      i18n_({element: caption, key: 'Bio.Description'});
-
-      inputFields.push(this.firstNameInputField, this.lastNameInputField, this.bioInputField);
+      inputFields.push(
+        this.firstNameInputField,
+        this.lastNameInputField,
+        this.bioInputField
+      );
 
       this.editPeer = new EditPeer({
         peerId: rootScope.myId,
         inputFields,
-        listenerSetter: this.listenerSetter
+        listenerSetter: this.listenerSetter,
+        middleware: this.middlewareHelper.get()
       });
 
       this.content.append(this.editPeer.nextBtn);
@@ -89,7 +131,11 @@ export default class AppEditProfileTab extends SliderSuperTab {
         listenerSetter: this.listenerSetter,
         onChange: () => {
           this.editPeer.handleChange();
-          this.setProfileUrl();
+          // this.setProfileUrl();
+
+          const {error} = this.usernameInputField;
+          const isPurchase = error?.type === 'USERNAME_PURCHASE_AVAILABLE';
+          setUsername(isPurchase ? this.usernameInputField.value : undefined);
         },
         availableText: 'EditProfile.Username.Available',
         takenText: 'EditProfile.Username.Taken',
@@ -99,23 +145,36 @@ export default class AppEditProfileTab extends SliderSuperTab {
       inputWrapper.append(this.usernameInputField.container);
 
       const caption = section.caption;
-      caption.append(i18n('UsernameSettings.ChangeDescription'));
-      caption.append(document.createElement('br'), document.createElement('br'));
 
-      const profileUrlContainer = this.profileUrlContainer = document.createElement('div');
-      profileUrlContainer.classList.add('profile-url-container');
+      const {setUsername, element: p} = purchaseUsernameCaption();
 
-      const profileUrlAnchor = this.profileUrlAnchor = document.createElement('a');
-      profileUrlAnchor.classList.add('profile-url');
-      profileUrlAnchor.href = '#';
-      profileUrlAnchor.target = '_blank';
+      caption.append(
+        p,
+        i18n('UsernameHelp')
+        // document.createElement('br'),
+        // document.createElement('br')
+      );
 
-      profileUrlContainer.append(i18n('UsernameHelpLink', [profileUrlAnchor]));
-
-      caption.append(profileUrlContainer);
+      // const profileUrlContainer = this.profileUrlContainer = document.createElement('div');
+      // profileUrlContainer.classList.add('profile-url-container');
+      // const profileUrlAnchor = this.profileUrlAnchor = anchorCopy();
+      // profileUrlContainer.append(i18n('UsernameHelpLink', [profileUrlAnchor]));
+      // caption.append(profileUrlContainer);
 
       inputFields.push(this.usernameInputField);
       section.content.append(inputWrapper);
+      this.scrollable.append(section.container);
+    }
+
+    {
+      const section = new UsernamesSection({
+        peerId: rootScope.myId,
+        peer: user,
+        listenerSetter: this.listenerSetter,
+        usernameInputField: this.usernameInputField,
+        middleware: this.middlewareHelper.get()
+      });
+
       this.scrollable.append(section.container);
     }
 
@@ -124,7 +183,12 @@ export default class AppEditProfileTab extends SliderSuperTab {
 
       const promises: Promise<any>[] = [];
 
-      promises.push(this.managers.appProfileManager.updateProfile(this.firstNameInputField.value, this.lastNameInputField.value, this.bioInputField.value).then(() => {
+      const profilePromise = this.managers.appProfileManager.updateProfile(
+        this.firstNameInputField.value,
+        this.lastNameInputField.value,
+        this.bioInputField.value
+      );
+      promises.push(profilePromise.then(() => {
         this.close();
       }, (err) => {
         console.error('updateProfile error:', err);
@@ -145,27 +209,21 @@ export default class AppEditProfileTab extends SliderSuperTab {
       });
     }, {listenerSetter: this.listenerSetter});
 
-    const user = await this.managers.appUsersManager.getSelf();
-
-    const userFull = await this.managers.appProfileManager.getProfile(user.id, true);
-
     this.firstNameInputField.setOriginalValue(user.first_name, true);
     this.lastNameInputField.setOriginalValue(user.last_name, true);
     this.bioInputField.setOriginalValue(userFull.about, true);
-    this.usernameInputField.setOriginalValue(user.username, true);
+    this.usernameInputField.setOriginalValue(getPeerEditableUsername(user), true);
 
-    this.setProfileUrl();
+    // this.setProfileUrl();
     this.editPeer.handleChange();
   }
 
-  private setProfileUrl() {
-    if(this.usernameInputField.input.classList.contains('error') || !this.usernameInputField.value.length) {
-      this.profileUrlContainer.style.display = 'none';
-    } else {
-      this.profileUrlContainer.style.display = '';
-      const url = 'https://t.me/' + this.usernameInputField.value;
-      this.profileUrlAnchor.innerText = url;
-      this.profileUrlAnchor.href = url;
-    }
-  }
+  // private setProfileUrl() {
+  //   if(this.usernameInputField.input.classList.contains('error') || !this.usernameInputField.value.length) {
+  //     this.profileUrlContainer.style.display = 'none';
+  //   } else {
+  //     this.profileUrlContainer.style.display = '';
+  //     this.profileUrlAnchor.replaceWith(this.profileUrlAnchor = anchorCopy({mePath: this.usernameInputField.value}));
+  //   }
+  // }
 }

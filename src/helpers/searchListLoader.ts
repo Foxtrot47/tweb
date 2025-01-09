@@ -9,8 +9,8 @@ import type {SearchSuperContext} from '../components/appSearchSuper.';
 import type {Message} from '../layer';
 import type {MessagesStorageKey, MyMessage} from '../lib/appManagers/appMessagesManager';
 import {AppManagers} from '../lib/appManagers/managers';
-import incrementMessageId from '../lib/appManagers/utils/messageId/incrementMessageId';
-import rootScope from '../lib/rootScope';
+import apiManagerProxy from '../lib/mtproto/mtprotoworker';
+import rootScope, {BroadcastEvents} from '../lib/rootScope';
 import forEachReverse from './array/forEachReverse';
 import filterChatPhotosMessages from './filterChatPhotosMessages';
 import ListLoader, {ListLoaderOptions} from './listLoader';
@@ -29,17 +29,19 @@ export default class SearchListLoader<Item extends {mid: number, peerId: PeerId}
   } = {}) {
     super({
       ...options,
-      loadMore: (anchor, older, loadCount) => {
+      loadMore: async(anchor, older, loadCount) => {
         const backLimit = older ? 0 : loadCount;
-        let maxId = anchor?.mid;
+        let offsetId = anchor?.mid ?? this.searchContext.maxId;
 
-        if(maxId === undefined) maxId = this.searchContext.maxId;
-        if(!older) maxId = incrementMessageId(maxId, 1);
+        if(!older) offsetId = await this.managers.appMessagesIdsManager.incrementMessageId(offsetId, 1);
 
-        return this.managers.appMessagesManager.getSearch({
+        const peerId = this.searchContext.peerId || anchor?.peerId;
+
+        return this.managers.appMessagesManager.getHistory({
           ...this.searchContext,
-          peerId: this.searchContext.peerId || anchor?.peerId,
-          maxId,
+          peerId,
+          offsetId,
+          offsetPeerId: !peerId ? anchor?.peerId : undefined,
           limit: backLimit ? 0 : loadCount,
           backLimit
         }).then((value) => {
@@ -51,11 +53,15 @@ export default class SearchListLoader<Item extends {mid: number, peerId: PeerId}
             filterChatPhotosMessages(value);
           }
 
-          if(value.next_rate) {
-            this.searchContext.nextRate = value.next_rate;
+          if(value.nextRate) {
+            this.searchContext.nextRate = value.nextRate;
           }
 
-          return {count: value.count, items: value.history};
+          if(!value.messages) {
+            value.messages = value.history.map((mid) => apiManagerProxy.getMessageByPeer(peerId, mid));
+          }
+
+          return {count: value.count, items: value.messages};
         });
       },
       processItem: async(message) => {
@@ -91,7 +97,7 @@ export default class SearchListLoader<Item extends {mid: number, peerId: PeerId}
     return filtered;
   }
 
-  protected onHistoryDelete = ({peerId, msgs}: {peerId: PeerId, msgs: Set<number>}) => {
+  protected onHistoryDelete = ({peerId, msgs}: BroadcastEvents['history_delete']) => {
     const shouldBeDeleted = (item: Item) => item.peerId === peerId && msgs.has(item.mid);
     const filter = (item: Item, idx: number, arr: Item[]) => {
       if(shouldBeDeleted(item)) {
@@ -115,7 +121,8 @@ export default class SearchListLoader<Item extends {mid: number, peerId: PeerId}
   };
 
   protected onHistoryMultiappend = async(message: Message.message | Message.messageService) => {
-    if(this.searchContext.folderId !== undefined) {
+    const {searchContext} = this;
+    if(searchContext.folderId !== undefined) {
       return;
     }
 
@@ -124,33 +131,28 @@ export default class SearchListLoader<Item extends {mid: number, peerId: PeerId}
       return;
     }
 
-    if(message.peerId !== this.searchContext.peerId) {
+    if(message.peerId !== searchContext.peerId) {
       return;
     }
 
     const filtered = await this.filterMids([message.mid]);
+    if(this.searchContext !== searchContext) return;
     const targets = (await Promise.all(filtered.map((message) => this.processItem(message)))).filter(Boolean);
-    if(targets.length) {
-      /* const {previous, current, next} = this;
-      const targets = previous.concat(current, next);
-      const currentIdx = targets.length;
-      const mid = targets[0].mid;
-      let i = 0, length = targets.length;
-      for(; i < length; ++i) {
-        const target = targets[i];
-        if(!target || mid < target.mid) {
-          break;
-        }
-      }
+    if(this.searchContext !== searchContext) return;
+    if(!targets.length) {
+      return;
+    }
 
-      if(i < currentIdx) previous.push(...targets);
-      else next. */
+    // * it can be already added because of `message_sent`
+    const allTargets = this.previous.concat(this.next, this.current ? [this.current] : []);
+    if(allTargets.some((item) => item?.mid === message.mid)) {
+      return;
+    }
 
-      if(!this.current) {
-        this.previous.push(...targets);
-      } else {
-        this.next.push(...targets);
-      }
+    if(!this.current) {
+      this.previous.push(...targets);
+    } else {
+      this.next.push(...targets);
     }
   };
 

@@ -8,7 +8,7 @@ import appNavigationController, {NavigationItem} from '../components/appNavigati
 import IS_TOUCH_SUPPORTED from '../environment/touchSupport';
 import {IS_MOBILE_SAFARI} from '../environment/userAgent';
 import cancelEvent from './dom/cancelEvent';
-import {CLICK_EVENT_NAME} from './dom/clickEvent';
+import {CLICK_EVENT_NAME, hasMouseMovedSinceDown} from './dom/clickEvent';
 import findUpAsChild from './dom/findUpAsChild';
 import EventListenerBase from './eventListenerBase';
 
@@ -20,7 +20,7 @@ export default class OverlayClickHandler extends EventListenerBase<{
   protected listenerOptions: AddEventListenerOptions;
 
   constructor(
-    protected navigationType: NavigationItem['type'],
+    protected navigationType?: NavigationItem['type'],
     protected withOverlay?: boolean
   ) {
     super(false);
@@ -28,8 +28,15 @@ export default class OverlayClickHandler extends EventListenerBase<{
   }
 
   protected onClick = (e: MouseEvent | TouchEvent) => {
-    if(this.element && findUpAsChild(e.target as HTMLElement, this.element)) {
+    if(hasMouseMovedSinceDown(e)) {
       return;
+    }
+
+    if(this.element) {
+      const isRoot = this.element === document.body;
+      if(!isRoot && findUpAsChild(e.target as HTMLElement, this.element)) {
+        return;
+      }
     }
 
     if(this.listenerOptions?.capture) {
@@ -53,15 +60,15 @@ export default class OverlayClickHandler extends EventListenerBase<{
 
     document.removeEventListener(CLICK_EVENT_NAME, this.onClick, this.listenerOptions);
 
-    if(!IS_MOBILE_SAFARI) {
+    if(!IS_MOBILE_SAFARI && this.navigationType) {
       appNavigationController.removeByType(this.navigationType);
     }
   }
 
-  public open(element: HTMLElement) {
+  public open(element = document.body) {
     this.close();
 
-    if(!IS_MOBILE_SAFARI) {
+    if(!IS_MOBILE_SAFARI && this.navigationType) {
       appNavigationController.pushItem({
         type: this.navigationType,
         onPop: (canAnimate) => {
@@ -83,7 +90,14 @@ export default class OverlayClickHandler extends EventListenerBase<{
       });
     }
 
-    this.overlay && this.element.parentElement.insertBefore(this.overlay, this.element);
+    const isRoot = this.element === document.body;
+    if(this.overlay) {
+      if(isRoot) {
+        this.element.append(this.overlay);
+      } else {
+        this.element.parentElement.insertBefore(this.overlay, this.element);
+      }
+    }
 
     // document.body.classList.add('disable-hover');
 

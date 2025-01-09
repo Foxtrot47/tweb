@@ -5,7 +5,6 @@
  */
 
 import AppTwoStepVerificationTab from '.';
-import {SettingSection} from '../..';
 import cancelEvent from '../../../../helpers/dom/cancelEvent';
 import {canFocus} from '../../../../helpers/dom/canFocus';
 import {attachClickEvent} from '../../../../helpers/dom/clickEvent';
@@ -20,6 +19,7 @@ import PasswordMonkey from '../../../monkeys/password';
 import PasswordInputField from '../../../passwordInputField';
 import {SliderSuperTab} from '../../../slider';
 import AppTwoStepVerificationReEnterPasswordTab from './reEnterPassword';
+import SettingSection from '../../../settingSection';
 
 export default class AppTwoStepVerificationEnterPasswordTab extends SliderSuperTab {
   public state: AccountPassword;
@@ -27,7 +27,7 @@ export default class AppTwoStepVerificationEnterPasswordTab extends SliderSuperT
   public plainPassword: string;
   public isFirst = true;
 
-  protected init() {
+  public init() {
     const isNew = !this.state.pFlags.has_password || this.plainPassword;
     this.container.classList.add('two-step-verification', 'two-step-verification-enter-password');
     this.setTitle(isNew ? 'PleaseEnterFirstPassword' : 'PleaseEnterCurrentPassword');
@@ -55,7 +55,7 @@ export default class AppTwoStepVerificationEnterPasswordTab extends SliderSuperT
     inputWrapper.append(passwordInputField.container, btnContinue);
     section.content.append(monkey.container, inputWrapper);
 
-    this.scrollable.container.append(section.container);
+    this.scrollable.append(section.container);
 
     passwordInputField.input.addEventListener('keypress', (e) => {
       if(passwordInputField.input.classList.contains('error')) {

@@ -10,18 +10,18 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 1rem;
+    padding-inline: 1rem;
     min-height: 3.5rem;
     flex: 0 0 auto;
     user-select: none;
     cursor: default;
-    
+
     .btn-menu {
       overflow-y: overlay;
     }
 
     @include respond-to(handhelds) {
-      padding: 0 .5rem;
+      padding-inline: .5rem;
     }
 
     /* //position: sticky !important;
@@ -29,25 +29,86 @@
     top: 0;
     z-index: 1; */
 
+    &__rows {
+      overflow: hidden;
+      flex: 1 1 auto;
+
+      .sidebar-header__title {
+        font-size: var(--font-size-16);
+        line-height: var(--line-height-16);
+        // margin-bottom: .125rem;
+      }
+    }
+
     &__title {
       flex: 1;
       font-weight: var(--font-weight-bold);
-      padding-left: 1.5rem;
+      padding-inline-start: 1.5rem;
       font-size: 1.25rem;
       color: var(--primary-text-color);
     }
 
+    &__subtitle {
+      color: var(--secondary-text-color);
+      font-size: var(--font-size-14);
+      line-height: 20px;
+      padding-inline-start: 1.5rem;
+
+      .transition {
+        height: 20px;
+      }
+    }
+
+    &__title,
+    &__subtitle {
+      @include text-overflow(true);
+    }
+
     .btn-icon + .btn-icon {
-      margin-left: .5rem;
+      margin-inline-start: .5rem;
     }
 
     &-right {
       flex: 0 0 auto;
     }
+
+    .scrollable-y-bordered & {
+      position: relative;
+      // min-height: 3.5625rem;
+      // border-bottom: 1px solid transparent;
+
+      // @include animation-level(2) {
+      //   transition: border-top-color var(--transition-standard-in), border-bottom-color var(--transition-standard-in);
+      // }
+
+      &:after {
+        content: " ";
+        position: absolute;
+        bottom: -1px;
+        left: 0;
+        right: 0;
+        height: 1px;
+        opacity: 0;
+        z-index: 1;
+        background-color: var(--border-color);
+
+        @include animation-level(2) {
+          transition: opacity var(--transition-standard-in);
+        }
+      }
+    }
+
+    .scrollable-y-bordered:not(.scrolled-top) & {
+      // border-bottom-color: var(--border-color);
+      &:after {
+        opacity: 1;
+      }
+    }
   }
 
   &-close-button {
     overflow: inherit !important;
+    flex: 0 0 auto;
     width: 2.5rem;
     height: 2.5rem;
   }

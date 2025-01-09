@@ -18,7 +18,14 @@ let out = '';
 ['lang', 'langSign'].forEach(part => {
   const path = `../${part}.ts`;
 
-  let str = fs.readFileSync(path).toString().replace(/\s.+\/\/.+/g, '');
+  let str = fs.readFileSync(path).toString()
+  .replace(/\s+\/\/.+/g, '')
+  // .replace(/\\'/g, '')
+  .replace(/"/g, `\\"`)
+  // .replace(/'/g, '"')
+  .replace(/([^\\])'/g, '$1"')
+  .replace(/\\'/g, '\'')
+  // .replace(/"(.+?)(?:")(.*?)"/g, '"$1\"$2"');
   {
     const pattern = '= {';
     str = str.slice(str.indexOf(pattern) + pattern.length - 1);
@@ -34,7 +41,7 @@ let out = '';
   // idx -= 1;
   // console.log(str.slice(idx, idx + 100));
   const json = JSON.parse(str);
-  // console.log(json);
+  console.log(json);
 
   for(const key in json) {
     const value = json[key];

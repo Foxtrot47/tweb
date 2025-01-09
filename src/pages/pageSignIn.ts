@@ -5,20 +5,14 @@
  */
 
 import {putPreloader} from '../components/putPreloader';
-import Scrollable from '../components/scrollable';
 import Page from './page';
-import InputField from '../components/inputField';
 import CheckboxField from '../components/checkboxField';
 import Button from '../components/button';
-import fastSmoothScroll from '../helpers/fastSmoothScroll';
 import IS_TOUCH_SUPPORTED from '../environment/touchSupport';
 import App from '../config/app';
 import I18n, {_i18n, i18n} from '../lib/langPack';
 import lottieLoader from '../lib/rlottie/lottieLoader';
 import ripple from '../components/ripple';
-import findUpTag from '../helpers/dom/findUpTag';
-import findUpClassName from '../helpers/dom/findUpClassName';
-import {randomLong} from '../helpers/random';
 import pageSignQR from './pageSignQR';
 import getLanguageChangeButton from '../components/languageChangeButton';
 import cancelEvent from '../helpers/dom/cancelEvent';
@@ -29,14 +23,9 @@ import sessionStorage from '../lib/sessionStorage';
 import {DcAuthKey} from '../types';
 import placeCaretAtEnd from '../helpers/dom/placeCaretAtEnd';
 import {HelpCountry, HelpCountryCode} from '../layer';
-import {getCountryEmoji} from '../vendor/emoji';
-import simulateEvent from '../helpers/dom/dispatchEvent';
 import stateStorage from '../lib/stateStorage';
 import rootScope from '../lib/rootScope';
 import TelInputField from '../components/telInputField';
-import IS_EMOJI_SUPPORTED from '../environment/emojiSupport';
-import setInnerHTML from '../helpers/dom/setInnerHTML';
-import wrapEmojiText from '../lib/richTextProcessor/wrapEmojiText';
 import apiManagerProxy from '../lib/mtproto/mtprotoworker';
 import CountryInputField from '../components/countryInputField';
 
@@ -167,11 +156,23 @@ const onFirstMount = () => {
       api_id: App.id,
       api_hash: App.hash,
       settings: {
-        _: 'codeSettings' // that's how we sending Type
+        _: 'codeSettings', // that's how we sending Type
+        pFlags: {}
       }
       // lang_code: navigator.language || 'en'
-    }).then((code) => {
+    }).then(async(code) => {
       // console.log('got code', code);
+
+      if(code._ === 'auth.sentCodeSuccess') {
+        const {authorization} = code;
+        if(authorization._ === 'auth.authorization') {
+          await rootScope.managers.apiManager.setUser(authorization.user);
+
+          import('./pageIm').then((m) => {
+            m.default.mount();
+          });
+        }
+      }
 
       import('./pageAuthCode').then((m) => m.default.mount(Object.assign(code, {phone_number: phone_number})));
     }).catch((err) => {
@@ -237,7 +238,7 @@ const onFirstMount = () => {
       const langPack = stateStorage.getFromCache('langPack');
       if(langPack && !langPack.countries?.hash) {
         I18n.getLangPack(langPack.lang_code).then(() => {
-          simulateEvent(telEl, 'input');
+          telInputField.simulateInputEvent();
         });
       }
 

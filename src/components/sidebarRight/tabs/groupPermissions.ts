@@ -4,117 +4,126 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
+import type {ChatRights} from '../../../lib/appManagers/appChatsManager';
 import {attachClickEvent} from '../../../helpers/dom/clickEvent';
 import findUpTag from '../../../helpers/dom/findUpTag';
 import replaceContent from '../../../helpers/dom/replaceContent';
 import ListenerSetter from '../../../helpers/listenerSetter';
 import ScrollableLoader from '../../../helpers/scrollableLoader';
-import {ChannelParticipant, Chat, ChatBannedRights, Update} from '../../../layer';
-import {ChatRights} from '../../../lib/appManagers/appChatsManager';
-import appDialogsManager, {DIALOG_LIST_ELEMENT_TAG} from '../../../lib/appManagers/appDialogsManager';
+import {ChannelParticipant, Chat, ChatAdminRights, ChatBannedRights} from '../../../layer';
+import appDialogsManager, {DialogDom, DIALOG_LIST_ELEMENT_TAG} from '../../../lib/appManagers/appDialogsManager';
 import {AppManagers} from '../../../lib/appManagers/managers';
 import combineParticipantBannedRights from '../../../lib/appManagers/utils/chats/combineParticipantBannedRights';
 import hasRights from '../../../lib/appManagers/utils/chats/hasRights';
+import getPeerActiveUsernames from '../../../lib/appManagers/utils/peers/getPeerActiveUsernames';
 import getPeerId from '../../../lib/appManagers/utils/peers/getPeerId';
-import I18n, {i18n, join, LangPackKey} from '../../../lib/langPack';
+import {i18n, join, LangPackKey} from '../../../lib/langPack';
 import rootScope from '../../../lib/rootScope';
-import CheckboxField from '../../checkboxField';
 import PopupPickUser from '../../popups/pickUser';
 import Row from '../../row';
-import {SettingSection} from '../../sidebarLeft';
+import SettingSection from '../../settingSection';
 import {SliderSuperTabEventable} from '../../sliderTab';
 import {toast} from '../../toast';
 import AppUserPermissionsTab from './userPermissions';
+import CheckboxFields, {CheckboxFieldsField} from '../../checkboxFields';
+import PopupElement from '../../popups';
+import wrapPeerTitle from '../../wrappers/peerTitle';
+import apiManagerProxy from '../../../lib/mtproto/mtprotoworker';
+import RangeStepsSelector from '../../rangeStepsSelector';
+import formatDuration from '../../../helpers/formatDuration';
+import {wrapFormattedDuration} from '../../wrappers/wrapDuration';
 
-export class ChatPermissions {
-  public v: Array<{
-    flags: ChatRights[],
-    text: LangPackKey,
-    exceptionText: LangPackKey,
-    checkboxField?: CheckboxField,
-  }>;
-  private toggleWith: Partial<{[chatRight in ChatRights]: ChatRights[]}>;
+type PermissionsCheckboxFieldsField = CheckboxFieldsField & {
+  flags: ChatRights[],
+  exceptionText: LangPackKey
+};
+
+type AdministratorRightsCheckboxFieldsField = CheckboxFieldsField & {
+  flags: ChatRights[]
+};
+
+export class ChatPermissions extends CheckboxFields<PermissionsCheckboxFieldsField> {
+  protected chat: Chat.chat | Chat.channel;
+  protected rights: ChatBannedRights.chatBannedRights;
+  protected defaultBannedRights: ChatBannedRights.chatBannedRights;
 
   constructor(private options: {
     chatId: ChatId,
     listenerSetter: ListenerSetter,
     appendTo: HTMLElement,
-    participant?: ChannelParticipant.channelParticipantBanned
+    participant?: ChannelParticipant.channelParticipantBanned,
+    forChat?: boolean
   }, private managers: AppManagers) {
+    super({
+      listenerSetter: options.listenerSetter,
+      fields: [],
+      asRestrictions: true
+    });
+
     this.construct();
   }
 
   public async construct() {
-    this.v = [
-      {flags: ['send_messages'], text: 'UserRestrictionsSend', exceptionText: 'UserRestrictionsNoSend'},
-      {flags: ['send_media'], text: 'UserRestrictionsSendMedia', exceptionText: 'UserRestrictionsNoSendMedia'},
+    const options = this.options;
+    const peerId = options.chatId.toPeerId(true);
+    const chat = this.chat = apiManagerProxy.getChat(options.chatId) as Chat.chat | Chat.channel;
+    const isForum = apiManagerProxy.isForum(peerId);
+    const defaultBannedRights = this.defaultBannedRights = chat.default_banned_rights;
+    const rights = this.rights = options.participant ? combineParticipantBannedRights(chat as Chat.channel, options.participant.banned_rights) : defaultBannedRights;
+
+    const mediaNested: PermissionsCheckboxFieldsField[] = [
+      {flags: ['send_photos'], text: 'UserRestrictionsSendPhotos', exceptionText: 'UserRestrictionsNoSendPhotos'},
+      {flags: ['send_videos'], text: 'UserRestrictionsSendVideos', exceptionText: 'UserRestrictionsNoSendVideos'},
       {flags: ['send_stickers', 'send_gifs'], text: 'UserRestrictionsSendStickers', exceptionText: 'UserRestrictionsNoSendStickers'},
-      {flags: ['send_polls'], text: 'UserRestrictionsSendPolls', exceptionText: 'UserRestrictionsNoSendPolls'},
+      {flags: ['send_audios'], text: 'UserRestrictionsSendMusic', exceptionText: 'UserRestrictionsNoSendMusic'},
+      {flags: ['send_docs'], text: 'UserRestrictionsSendFiles', exceptionText: 'UserRestrictionsNoSendDocs'},
+      {flags: ['send_voices'], text: 'UserRestrictionsSendVoices', exceptionText: 'UserRestrictionsNoSendVoice'},
+      {flags: ['send_roundvideos'], text: 'UserRestrictionsSendRound', exceptionText: 'UserRestrictionsNoSendRound'},
       {flags: ['embed_links'], text: 'UserRestrictionsEmbedLinks', exceptionText: 'UserRestrictionsNoEmbedLinks'},
-      {flags: ['invite_users'], text: 'UserRestrictionsInviteUsers', exceptionText: 'UserRestrictionsNoInviteUsers'},
-      {flags: ['pin_messages'], text: 'UserRestrictionsPinMessages', exceptionText: 'UserRestrictionsNoPinMessages'},
-      {flags: ['change_info'], text: 'UserRestrictionsChangeInfo', exceptionText: 'UserRestrictionsNoChangeInfo'}
+      {flags: ['send_polls'], text: 'UserRestrictionsSendPolls', exceptionText: 'UserRestrictionsNoSendPolls'}
     ];
 
-    this.toggleWith = {
-      'send_messages': ['send_media', 'send_stickers', 'send_polls', 'embed_links']
-    };
+    let v: PermissionsCheckboxFieldsField[] = [
+      {flags: ['send_plain'], text: 'UserRestrictionsSend', exceptionText: 'UserRestrictionsNoSend'},
+      {flags: ['send_media'], text: 'UserRestrictionsSendMedia', exceptionText: 'UserRestrictionsNoSendMedia', nested: mediaNested},
+      {flags: ['invite_users'], text: 'UserRestrictionsInviteUsers', exceptionText: 'UserRestrictionsNoInviteUsers'},
+      {flags: ['pin_messages'], text: 'UserRestrictionsPinMessages', exceptionText: 'UserRestrictionsNoPinMessages'},
+      isForum && {flags: ['manage_topics'], text: 'CreateTopicsPermission', exceptionText: 'UserRestrictionsNoChangeInfo'},
+      {flags: ['change_info'], text: 'UserRestrictionsChangeInfo', exceptionText: 'UserRestrictionsNoChangeInfo'}
+    ];
+    v = v.filter(Boolean);
 
-    const options = this.options;
-    const chat: Chat.chat | Chat.channel = await this.managers.appChatsManager.getChat(options.chatId);
-    const defaultBannedRights = chat.default_banned_rights;
-    const rights = options.participant ? combineParticipantBannedRights(chat as Chat.channel, options.participant.banned_rights) : defaultBannedRights;
 
-    const restrictionText: LangPackKey = options.participant ? 'UserRestrictionsDisabled' : 'EditCantEditPermissionsPublic';
-    for(const info of this.v) {
+    const map: {[action in ChatRights]?: PermissionsCheckboxFieldsField} = {};
+    v.push(...mediaNested);
+    v.forEach((info) => {
       const mainFlag = info.flags[0];
-      info.checkboxField = new CheckboxField({
-        text: info.text,
-        checked: hasRights(chat, mainFlag, rights),
-        restriction: true,
-        withRipple: true
-      });
+      map[mainFlag] = info;
+      info.checked = hasRights(chat, mainFlag, rights);
+    });
 
-      if((
-        options.participant &&
-          defaultBannedRights.pFlags[mainFlag as keyof typeof defaultBannedRights['pFlags']]
-      ) || (
-        (chat as Chat.channel).username &&
-          (
-            info.flags.includes('pin_messages') ||
-            info.flags.includes('change_info')
-          )
-      )
-      ) {
-        info.checkboxField.input.disabled = true;
+    mediaNested.forEach((info) => info.nestedTo = map.send_media);
+    map.send_media.toggleWith = {unchecked: mediaNested, checked: mediaNested};
+    map.embed_links.toggleWith = {checked: [map.send_plain]};
+    map.send_plain.toggleWith = {unchecked: [map.embed_links]};
 
-        /* options.listenerSetter.add(info.checkboxField.input)('change', (e) => {
-          if(!e.isTrusted) {
-            return;
-          }
+    this.fields = v;
 
-          cancelEvent(e);
-          toast('This option is disabled for all members in Group Permissions.');
-          info.checkboxField.checked = false;
-        }); */
+    for(const info of this.fields) {
+      if(!options.forChat && defaultBannedRights.pFlags[info.flags[0] as keyof typeof defaultBannedRights['pFlags']]) {
+        info.restrictionText = 'UserRestrictionsDisabled';
+      } else if(getPeerActiveUsernames(chat as Chat.channel)[0] && (info.flags.includes('pin_messages') || info.flags.includes('change_info'))) {
+        info.restrictionText = options.participant ? 'UserRestrictionsDisabled' : 'EditCantEditPermissionsPublic';
+      }
+    }
 
-        attachClickEvent(info.checkboxField.label, (e) => {
-          toast(I18n.format(restrictionText, true));
-        }, {listenerSetter: options.listenerSetter});
+    for(const info of this.fields) {
+      if(info.nestedTo) {
+        continue;
       }
 
-      if(this.toggleWith[mainFlag]) {
-        options.listenerSetter.add(info.checkboxField.input)('change', () => {
-          if(!info.checkboxField.checked) {
-            const other = this.v.filter((i) => this.toggleWith[mainFlag].includes(i.flags[0]));
-            other.forEach((info) => {
-              info.checkboxField.checked = false;
-            });
-          }
-        });
-      }
-
-      options.appendTo.append(info.checkboxField.label);
+      const {nodes} = this.createField(info);
+      options.appendTo.append(...nodes);
     }
   }
 
@@ -125,14 +134,148 @@ export class ChatPermissions {
       pFlags: {}
     };
 
-    for(const info of this.v) {
+    const IGNORE_FLAGS: Set<ChatRights> = new Set([
+      'send_media'
+    ]);
+    for(const info of this.fields) {
       const banned = !info.checkboxField.checked;
-      if(banned) {
-        info.flags.forEach((flag) => {
-          // @ts-ignore
-          rights.pFlags[flag] = true;
-        });
+      if(!banned) {
+        continue;
       }
+
+      info.flags.forEach((flag) => {
+        if(IGNORE_FLAGS.has(flag)) {
+          return;
+        }
+
+        // @ts-ignore
+        rights.pFlags[flag] = true;
+      });
+    }
+
+    return rights;
+  }
+}
+
+export class ChatAdministratorRights extends CheckboxFields<AdministratorRightsCheckboxFieldsField> {
+  protected rights: ChatAdminRights;
+  protected defaultBannedRights: ChatAdminRights;
+  protected restrictionText: LangPackKey;
+
+  constructor(private options: {
+    chatId: ChatId,
+    listenerSetter: ListenerSetter,
+    appendTo: HTMLElement,
+    participant?: ChannelParticipant.channelParticipantAdmin | ChannelParticipant.channelParticipantCreator,
+    chat: Chat,
+    canEdit?: boolean
+  }) {
+    super({
+      listenerSetter: options.listenerSetter,
+      fields: [],
+      asRestrictions: true
+    });
+
+    this.construct();
+  }
+
+  public construct() {
+    const options = this.options;
+    const chat = options.chat as Chat.chat | Chat.channel;
+    const isBroadcast = !!(chat as Chat.channel).pFlags.broadcast;
+    const isForum = !!(chat as Chat.channel).pFlags.forum;
+    const rights = this.rights = options.participant ? options.participant.admin_rights : undefined;
+
+    const manageMessagesNested: AdministratorRightsCheckboxFieldsField[] = isBroadcast && [
+      {flags: ['post_messages'], text: 'EditAdminPostMessages'},
+      {flags: ['edit_messages'], text: 'EditAdminEditMessages'},
+      {flags: ['delete_messages'], text: 'EditAdminDeleteMessages'}
+    ];
+
+    const manageStoriesNested: AdministratorRightsCheckboxFieldsField[] = isBroadcast && [
+      {flags: ['post_stories'], text: 'AdminRights.PostStories'},
+      {flags: ['edit_stories'], text: 'AdminRights.EditStories'},
+      {flags: ['delete_stories'], text: 'AdminRights.DeleteStories'}
+    ];
+
+    const manageMessagesNestedKey: ChatRights = 'post_messages_nested' as any;
+    const manageStoriesNestedKey: ChatRights = 'post_stories_nested' as any;
+    let v: AdministratorRightsCheckboxFieldsField[] = [
+      {flags: ['change_info'], text: isBroadcast ? 'EditAdminChangeChannelInfo' : 'EditAdminChangeGroupInfo'},
+      isBroadcast && {flags: [manageMessagesNestedKey], text: 'AdminRights.ManageMessages', nested: manageMessagesNested},
+      isBroadcast && {flags: [manageStoriesNestedKey], text: 'AdminRights.ManageStories', nested: manageStoriesNested},
+      !isBroadcast && {flags: ['delete_messages'], text: isBroadcast ? 'EditAdminDeleteMessages' : 'EditAdminGroupDeleteMessages'},
+      !isBroadcast && {flags: ['ban_users'], text: 'EditAdminBanUsers'},
+      !isBroadcast && {flags: ['invite_users'], text: 'EditAdminAddUsersViaLink'},
+      !isBroadcast && {flags: ['pin_messages'], text: 'EditAdminPinMessages'},
+      isForum && {flags: ['manage_topics'], text: 'ManageTopicsPermission'},
+      {flags: ['manage_call'], text: isBroadcast ? 'StartVoipChatPermission' : 'Channel.EditAdmin.ManageCalls'},
+      isBroadcast && {flags: ['invite_users'], text: 'Channel.EditAdmin.PermissionInviteSubscribers'},
+      !isBroadcast && {flags: ['anonymous'], text: 'EditAdminSendAnonymously', checked: rights ? undefined : false},
+      {flags: ['add_admins'], text: 'EditAdminAddAdmins', checked: rights ? undefined : false}
+    ];
+
+    const map: {[action in ChatRights]?: AdministratorRightsCheckboxFieldsField} = {};
+    v = v.filter(Boolean);
+    if(manageMessagesNested) v.push(...manageMessagesNested);
+    if(manageStoriesNested) v.push(...manageStoriesNested);
+    v.forEach((info) => {
+      const mainFlag = info.flags[0];
+      map[mainFlag] = info;
+      info.checked ??= hasRights(chat, mainFlag, rights);
+    });
+
+    if(manageMessagesNested) {
+      manageMessagesNested.forEach((info) => info.nestedTo = map[manageMessagesNestedKey]);
+      map[manageMessagesNestedKey].toggleWith = {unchecked: manageMessagesNested, checked: manageMessagesNested};
+    }
+
+    if(manageStoriesNested) {
+      manageStoriesNested.forEach((info) => info.nestedTo = map[manageStoriesNestedKey]);
+      map[manageStoriesNestedKey].toggleWith = {unchecked: manageStoriesNested, checked: manageStoriesNested};
+    }
+
+    this.fields = v;
+
+    const CREATOR_EXCEPTIONS: Set<ChatRights> = new Set([
+      'anonymous'
+    ]);
+
+    const isCreator = options.participant?._ === 'channelParticipantCreator';
+    for(const info of this.fields) {
+      const mainFlag = info.flags[0];
+      if(!options.canEdit) {
+        info.restrictionText = 'EditAdminCantEdit';
+      } else if((isCreator && !CREATOR_EXCEPTIONS.has(mainFlag as ChatRights)) || !hasRights(chat, mainFlag)) {
+        info.restrictionText = 'EditCantEditPermissions';
+      }
+    }
+
+    for(const info of this.fields) {
+      if(info.nestedTo) {
+        continue;
+      }
+
+      const {nodes} = this.createField(info);
+      options.appendTo.append(...nodes);
+    }
+  }
+
+  public takeOut() {
+    const rights: ChatAdminRights = {
+      _: 'chatAdminRights',
+      pFlags: {}
+    };
+
+    for(const info of this.fields) {
+      if(!info.checkboxField.checked) {
+        continue;
+      }
+
+      info.flags.forEach((flag) => {
+        // @ts-ignore
+        rights.pFlags[flag] = true;
+      });
     }
 
     return rights;
@@ -141,10 +284,13 @@ export class ChatPermissions {
 
 export default class AppGroupPermissionsTab extends SliderSuperTabEventable {
   public chatId: ChatId;
+  private participants: Map<PeerId, ChannelParticipant.channelParticipantBanned>;
 
-  protected async init() {
+  public async init() {
     this.container.classList.add('edit-peer-container', 'group-permissions-container');
     this.setTitle('ChannelPermissions');
+
+    this.participants = new Map();
 
     let chatPermissions: ChatPermissions;
     {
@@ -155,11 +301,73 @@ export default class AppGroupPermissionsTab extends SliderSuperTabEventable {
       chatPermissions = new ChatPermissions({
         chatId: this.chatId,
         listenerSetter: this.listenerSetter,
-        appendTo: section.content
+        appendTo: section.content,
+        forChat: true
       }, this.managers);
 
       this.eventListener.addEventListener('destroy', () => {
         this.managers.appChatsManager.editChatDefaultBannedRights(this.chatId, chatPermissions.takeOut());
+      }, {once: true});
+
+      this.scrollable.append(section.container);
+    }
+
+    {
+      const section = new SettingSection({
+        name: 'Slowmode',
+        caption: true
+      });
+
+      const chatFull = await this.managers.appProfileManager.getChannelFull(this.chatId);
+
+      let lastValue: number;
+      const range: RangeStepsSelector<number> = new RangeStepsSelector({
+        generateStep: (value) => {
+          let t: HTMLElement;
+          if(!value) {
+            t = i18n('SlowmodeOff');
+          } else {
+            const hours = Math.floor(value / 3600);
+            const minutes = Math.floor(value / 60) % 60;
+            const seconds = value % 60;
+            if(hours) {
+              t = i18n('SlowmodeHours', [hours]);
+            } else if(minutes) {
+              t = i18n('SlowmodeMinutes', [minutes]);
+            } else {
+              t = i18n('SlowmodeSeconds', [seconds]);
+            }
+          }
+
+          return [t, value];
+        },
+        onValue: (value) => {
+          if(lastValue === value) {
+            return;
+          }
+
+          lastValue = value;
+          if(value) {
+            section.caption.replaceChildren(i18n('SlowmodeInfoSelected', [wrapFormattedDuration(formatDuration(value, 1))]));
+          } else {
+            section.caption.replaceChildren(i18n('SlowmodeInfoOff'));
+          }
+        },
+        middleware: this.middlewareHelper.get()
+      });
+
+      const values = [0, 10, 30, 60, 300, 900, 3600];
+      const steps = range.generateSteps(values);
+      const initialValue = chatFull.slowmode_seconds || 0;
+      range.setSteps(steps, values.indexOf(initialValue));
+
+      section.content.append(range.container);
+
+      this.eventListener.addEventListener('destroy', () => {
+        const {value} = range;
+        if(value !== initialValue) {
+          this.managers.appChatsManager.toggleSlowMode(this.chatId, range.value);
+        }
       }, {once: true});
 
       this.scrollable.append(section.container);
@@ -175,27 +383,30 @@ export default class AppGroupPermissionsTab extends SliderSuperTabEventable {
         subtitleLangKey: 'Loading',
         icon: 'adduser',
         clickable: () => {
-          new PopupPickUser({
-            peerTypes: ['channelParticipants'],
+          PopupElement.createPopup(PopupPickUser, {
+            peerType: ['channelParticipants'],
             onSelect: (peerId) => {
               setTimeout(() => {
                 openPermissions(peerId);
               }, 0);
             },
             placeholder: 'ExceptionModal.Search.Placeholder',
-            peerId: -this.chatId
+            peerId: -this.chatId,
+            exceptSelf: true
           });
         },
         listenerSetter: this.listenerSetter
       });
 
       const openPermissions = async(peerId: PeerId) => {
-        let participant: AppUserPermissionsTab['participant'];
-        try {
-          participant = await this.managers.appProfileManager.getChannelParticipant(this.chatId, peerId) as any;
-        } catch(err) {
-          toast('User is no longer participant');
-          return;
+        let participant = this.participants.get(peerId);
+        if(!participant) {
+          try {
+            participant = await this.managers.appProfileManager.getParticipant(this.chatId, peerId) as typeof participant;
+          } catch(err) {
+            toast('User is no longer participant');
+            return;
+          }
         }
 
         const tab = this.slider.createTab(AppUserPermissionsTab);
@@ -206,15 +417,6 @@ export default class AppGroupPermissionsTab extends SliderSuperTabEventable {
       };
 
       section.content.append(addExceptionRow.container);
-
-      /* const removedUsersRow = new Row({
-        titleLangKey: 'ChannelBlockedUsers',
-        subtitleLangKey: 'NoBlockedUsers',
-        icon: 'deleteuser',
-        clickable: true
-      });
-
-      section.content.append(removedUsersRow.container); */
 
       const c = section.generateContentElement();
       c.classList.add('chatlist-container');
@@ -230,13 +432,13 @@ export default class AppGroupPermissionsTab extends SliderSuperTabEventable {
         openPermissions(peerId);
       }, {listenerSetter: this.listenerSetter});
 
-      const setSubtitle = async(li: Element, participant: ChannelParticipant.channelParticipantBanned) => {
+      const setSubtitle = async(dom: DialogDom, participant: ChannelParticipant.channelParticipantBanned) => {
         const bannedRights = participant.banned_rights;// appChatsManager.combineParticipantBannedRights(this.chatId, participant.banned_rights);
         const defaultBannedRights = ((await this.managers.appChatsManager.getChat(this.chatId)) as Chat.channel).default_banned_rights;
         // const combinedRights = appChatsManager.combineParticipantBannedRights(this.chatId, bannedRights);
 
         const cantWhat: LangPackKey[] = []/* , canWhat: LangPackKey[] = [] */;
-        chatPermissions.v.forEach((info) => {
+        chatPermissions.fields.forEach((info) => {
           const mainFlag = info.flags[0];
           // @ts-ignore
           if(bannedRights.pFlags[mainFlag] && !defaultBannedRights.pFlags[mainFlag]) {
@@ -247,61 +449,79 @@ export default class AppGroupPermissionsTab extends SliderSuperTabEventable {
           } */
         });
 
-        const el = li.querySelector('.user-last-message') as HTMLElement;
+        const el = dom.lastMessageSpan as HTMLElement;
 
         if(cantWhat.length) {
-          el.innerHTML = '';
-          el.append(...join(cantWhat.map((t) => i18n(t)), false));
+          el.replaceChildren(...join(cantWhat.map((t) => i18n(t)), false));
+          el.classList.toggle('hide', !cantWhat.length);
+        } else {
+          el.replaceChildren(i18n('UserRestrictionsBy', [await wrapPeerTitle({peerId: participant.kicked_by.toPeerId(false)})]));
+          el.classList.remove('hide');
         }/*  else if(canWhat.length) {
           str = 'Can ' + canWhat.join(canWhat.length === 2 ? ' and ' : ', ');
         } */
-
-        el.classList.toggle('hide', !cantWhat.length);
       };
 
       const add = (participant: ChannelParticipant.channelParticipantBanned, append: boolean) => {
-        const {dom} = appDialogsManager.addDialogNew({
-          peerId: getPeerId(participant.peer),
+        const peerId = getPeerId(participant.peer);
+        const dialogElement = appDialogsManager.addDialogNew({
+          peerId,
           container: list,
           rippleEnabled: true,
-          avatarSize: 48,
-          append
+          avatarSize: 'abitbigger',
+          append,
+          wrapOptions: {
+            middleware: this.middlewareHelper.get()
+          }
         });
 
-        setSubtitle(dom.listEl, participant);
+        this.participants.set(peerId, participant);
 
-        // dom.titleSpan.innerHTML = 'Chinaza Akachi';
-        // dom.lastMessageSpan.innerHTML = 'Can Add Users and Pin Messages';
+        (dialogElement.dom.listEl as any).dialogElement = dialogElement;
+
+        setSubtitle(dialogElement.dom, participant);
       };
 
-      // this.listenerSetter.add(rootScope)('updateChannelParticipant', (update: Update.updateChannelParticipant) => {
-      //   const needAdd = update.new_participant?._ === 'channelParticipantBanned' && !update.new_participant.banned_rights.pFlags.view_messages;
-      //   const li = list.querySelector(`[data-peer-id="${update.user_id}"]`);
-      //   if(needAdd) {
-      //     if(!li) {
-      //       add(update.new_participant as ChannelParticipant.channelParticipantBanned, false);
-      //     } else {
-      //       setSubtitle(li, update.new_participant as ChannelParticipant.channelParticipantBanned);
-      //     }
+      this.listenerSetter.add(rootScope)('chat_participant', (update) => {
+        const newParticipant = update.new_participant as ChannelParticipant.channelParticipantBanned;
+        const prevParticipant = update.prev_participant;
+        const peerId = update.user_id.toPeerId(false);
+        const needAdd = newParticipant?._ === 'channelParticipantBanned' &&
+          !newParticipant.banned_rights.pFlags.view_messages;
 
-      //     if(update.prev_participant?._ !== 'channelParticipantBanned') {
-      //       ++exceptionsCount;
-      //     }
-      //   } else {
-      //     if(li) {
-      //       li.remove();
-      //     }
+        if(newParticipant) {
+          this.participants.set(peerId, newParticipant);
+        } else {
+          this.participants.delete(peerId);
+        }
 
-      //     if(update.prev_participant?._ === 'channelParticipantBanned') {
-      //       --exceptionsCount;
-      //     }
-      //   }
+        const li = list.querySelector(`[data-peer-id="${peerId}"]`);
+        if(needAdd) {
+          if(!li) {
+            add(newParticipant, false);
+          } else {
+            setSubtitle((li as any).dialogElement.dom, newParticipant);
+          }
 
-      //   setLength();
-      // });
+          if(prevParticipant?._ !== 'channelParticipantBanned') {
+            ++exceptionsCount;
+          }
+        } else {
+          if(li) {
+            (li as any).dialogElement.remove();
+          }
+
+          if(prevParticipant?._ === 'channelParticipantBanned') {
+            --exceptionsCount;
+          }
+        }
+
+        setLength();
+      });
 
       const setLength = () => {
-        replaceContent(addExceptionRow.subtitle, i18n(exceptionsCount ? 'Permissions.ExceptionsCount' : 'Permissions.NoExceptions', [exceptionsCount]));
+        const el = i18n(exceptionsCount ? 'Permissions.ExceptionsCount' : 'Permissions.NoExceptions', [exceptionsCount]);
+        replaceContent(addExceptionRow.subtitle, el);
       };
 
       let exceptionsCount = 0;
@@ -311,7 +531,12 @@ export default class AppGroupPermissionsTab extends SliderSuperTabEventable {
         loader = new ScrollableLoader({
           scrollable: this.scrollable,
           getPromise: () => {
-            return this.managers.appProfileManager.getChannelParticipants(this.chatId, {_: 'channelParticipantsBanned', q: ''}, LOAD_COUNT, list.childElementCount).then((res) => {
+            return this.managers.appProfileManager.getChannelParticipants({
+              id: this.chatId,
+              filter: {_: 'channelParticipantsBanned', q: ''},
+              limit: LOAD_COUNT,
+              offset: list.childElementCount
+            }).then((res) => {
               for(const participant of res.participants) {
                 add(participant as ChannelParticipant.channelParticipantBanned, true);
               }

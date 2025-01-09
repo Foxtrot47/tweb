@@ -4,9 +4,12 @@
  * https://github.com/morethanwords/tweb/blob/master/LICENSE
  */
 
-import rootScope from '../lib/rootScope';
+import liteMode from '../helpers/liteMode';
 
-const SetTransition = (
+const $TRANSITION_RAF = Symbol('RAF'),
+  $TRANSITION_TIMEOUT = Symbol('TIMEOUT');
+
+type SetTransitionOptions = {
   element: HTMLElement,
   className: string,
   forwards: boolean,
@@ -14,8 +17,12 @@ const SetTransition = (
   onTransitionEnd?: () => void,
   useRafs?: number,
   onTransitionStart?: () => void
-) => {
-  const {timeout, raf} = element.dataset;
+};
+const SetTransition = (options: SetTransitionOptions) => {
+  const {element, className, forwards, duration, onTransitionEnd, onTransitionStart, useRafs} = options;
+  const classNames = className && className.split(' ');
+  const timeout: number = (element as any)[$TRANSITION_TIMEOUT];
+  const raf: number = (element as any)[$TRANSITION_RAF];
   if(timeout !== undefined) {
     clearTimeout(+timeout);
   }
@@ -26,7 +33,7 @@ const SetTransition = (
   if(raf !== undefined) {
     window.cancelAnimationFrame(+raf);
     if(!useRafs) {
-      delete element.dataset.raf;
+      delete (element as any)[$TRANSITION_RAF];
     }
   }
 
@@ -34,23 +41,26 @@ const SetTransition = (
   //   return;
   // }
 
-  if(useRafs && rootScope.settings.animationsEnabled && duration) {
-    element.dataset.raf = '' + window.requestAnimationFrame(() => {
-      delete element.dataset.raf;
-      SetTransition(element, className, forwards, duration, onTransitionEnd, useRafs - 1, onTransitionStart);
+  if(useRafs && liteMode.isAvailable('animations') && duration) {
+    (element as any)[$TRANSITION_RAF] = '' + window.requestAnimationFrame(() => {
+      delete (element as any)[$TRANSITION_RAF];
+      SetTransition({
+        ...options,
+        useRafs: useRafs - 1
+      });
     });
 
     return;
   }
 
   if(forwards && className) {
-    element.classList.add(className);
+    element.classList.add(...classNames);
   }
 
   const afterTimeout = () => {
-    delete element.dataset.timeout;
+    delete (element as any)[$TRANSITION_TIMEOUT];
     if(!forwards && className) {
-      element.classList.remove('backwards', className);
+      element.classList.remove('backwards', ...classNames);
     }
 
     element.classList.remove('animating');
@@ -59,7 +69,7 @@ const SetTransition = (
   };
 
   onTransitionStart?.();
-  if(!rootScope.settings.animationsEnabled || !duration) {
+  if(!liteMode.isAvailable('animations') || !duration) {
     element.classList.remove('animating', 'backwards');
     afterTimeout();
     return;
@@ -68,7 +78,7 @@ const SetTransition = (
   element.classList.add('animating');
 
   element.classList.toggle('backwards', !forwards);
-  element.dataset.timeout = '' + setTimeout(afterTimeout, duration);
+  (element as any)[$TRANSITION_TIMEOUT] = '' + setTimeout(afterTimeout, duration);
 };
 
 export default SetTransition;

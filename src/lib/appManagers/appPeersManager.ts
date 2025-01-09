@@ -18,8 +18,13 @@ import getPeerId from './utils/peers/getPeerId';
 import isUser from './utils/peers/isUser';
 import isAnyChat from './utils/peers/isAnyChat';
 import {NULL_PEER_ID} from '../mtproto/mtproto_config';
+import getPeerActiveUsernames from './utils/peers/getPeerActiveUsernames';
+import isPeerRestricted from './utils/peers/isPeerRestricted';
+import getPeerPhoto from './utils/peers/getPeerPhoto';
+import getServerMessageId from './utils/messageId/getServerMessageId';
+import MTProtoMessagePort from '../mtproto/mtprotoMessagePort';
 
-export type PeerType = 'channel' | 'chat' | 'megagroup' | 'group' | 'saved';
+export type PeerType = 'channel' | 'chat' | 'megagroup' | 'group' | 'saved' | 'savedDialog';
 export class AppPeersManager extends AppManager {
   public get peerId() {
     return this.appUsersManager.userId.toPeerId();
@@ -29,33 +34,30 @@ export class AppPeersManager extends AppManager {
     else appUsersManager.saveApiUser(instance);
   } */
 
+  public saveApiPeers(object: {chats?: Chat[], users?: User[]}) {
+    this.appChatsManager.saveApiChats(object.chats);
+    this.appUsersManager.saveApiUsers(object.users);
+  }
+
   public canPinMessage(peerId: PeerId) {
     return peerId.isUser() || this.appChatsManager.hasRights(peerId.toChatId(), 'pin_messages');
   }
 
-  public getPeerPhoto(peerId: PeerId): UserProfilePhoto.userProfilePhoto | ChatPhoto.chatPhoto {
-    if(this.isRestricted(peerId)) {
-      return;
-    }
-
-    const photo = peerId.isUser() ?
-      this.appUsersManager.getUserPhoto(peerId.toUserId()) :
-      this.appChatsManager.getChatPhoto(peerId.toChatId());
-
-    return photo._ !== 'chatPhotoEmpty' && photo._ !== 'userProfilePhotoEmpty' ? photo : undefined;
+  public getPeerPhoto(peerId: PeerId) {
+    const peer = this.getPeer(peerId) as User.user | Chat.channel;
+    return getPeerPhoto(peer);
   }
 
   public getPeerMigratedTo(peerId: PeerId) {
     if(peerId.isUser()) {
-      return false;
+      return;
     }
 
-    const chat: Chat.chat = this.appChatsManager.getChat(peerId.toChatId());
-    if(chat && chat.migrated_to && chat.pFlags.deactivated) {
-      return getPeerId(chat.migrated_to as InputChannel.inputChannel);
+    const chat = this.appChatsManager.getChat(peerId.toChatId()) as Chat.chat;
+    const migratedTo = chat?.migrated_to;
+    if(migratedTo && chat.pFlags.deactivated) {
+      return getPeerId(migratedTo);
     }
-
-    return false;
   }
 
   public getOutputPeer(peerId: PeerId): Peer {
@@ -78,8 +80,13 @@ export class AppPeersManager extends AppManager {
     return this.appChatsManager.getChatString(peerId.toChatId());
   }
 
-  public getPeerUsername(peerId: PeerId): string {
-    return this.getPeer(peerId).username || '';
+  public getPeerUsername(peerId: PeerId) {
+    return this.getPeerActiveUsernames(peerId)[0] || '';
+  }
+
+  public getPeerActiveUsernames(peerId: PeerId) {
+    const peer = this.getPeer(peerId);
+    return getPeerActiveUsernames(peer);
   }
 
   public getPeer(peerId: PeerId) {
@@ -107,8 +114,25 @@ export class AppPeersManager extends AppManager {
     return !peerId.isUser() && this.appChatsManager.isMegagroup(peerId.toChatId());
   }
 
+  public isForum(peerId: PeerId) {
+    return !peerId.isUser() && this.appChatsManager.isForum(peerId.toChatId());
+  }
+
   public isAnyGroup(peerId: PeerId): boolean {
     return !peerId.isUser() && !this.appChatsManager.isBroadcast(peerId.toChatId());
+  }
+
+  public isLikeGroup(peerId: PeerId) {
+    if(this.isAnyGroup(peerId)) {
+      return true;
+    }
+
+    const peer = this.getPeer(peerId) as Chat.channel;
+    if(!peer) {
+      return false;
+    }
+
+    return !!peer.pFlags.signature_profiles;
   }
 
   public isBroadcast(peerId: PeerId): boolean {
@@ -127,16 +151,28 @@ export class AppPeersManager extends AppManager {
     return isUser(peerId);
   }
 
+  public isRegularUser(peerId: PeerId) {
+    return this.isUser(peerId) && this.appUsersManager.isRegularUser(peerId);
+  }
+
   public isAnyChat(peerId: PeerId) {
     return isAnyChat(peerId);
   }
 
-  public isRestricted(peerId: PeerId) {
-    return peerId.isUser() ? this.appUsersManager.isRestricted(peerId.toUserId()) : this.appChatsManager.isRestricted(peerId.toChatId());
+  public isPeerRestricted(peerId: PeerId) {
+    return isPeerRestricted(this.getPeer(peerId));
+  }
+
+  public isPeerPublic(peerId: PeerId) {
+    return !!getPeerActiveUsernames(this.getPeer(peerId))[0];
+  }
+
+  public isSavedDialog(peerId: PeerId, threadId?: number) {
+    return !!(peerId === this.peerId && threadId);
   }
 
   public getRestrictionReasonText(peerId: PeerId) {
-    const peer: Chat.channel | User.user = this.getPeer(peerId);
+    const peer = this.getPeer(peerId) as Chat.channel | User.user;
     const reason = peer.restriction_reason ? getRestrictionReason(peer.restriction_reason) : undefined;
     if(reason) {
       return reason.text;
@@ -177,24 +213,39 @@ export class AppPeersManager extends AppManager {
     }
   } */
 
-  public getInputNotifyPeerById(peerId: PeerId, ignorePeerId: true): Exclude<InputNotifyPeer, InputNotifyPeer.inputNotifyPeer>;
-  public getInputNotifyPeerById(peerId: PeerId, ignorePeerId?: false): InputNotifyPeer.inputNotifyPeer;
-  public getInputNotifyPeerById(peerId: PeerId, ignorePeerId?: boolean): InputNotifyPeer {
+  // public getInputNotifyPeerById(peerId: PeerId, ignorePeerId: true): Exclude<InputNotifyPeer, InputNotifyPeer.inputNotifyPeer>;
+  // public getInputNotifyPeerById(peerId: PeerId, ignorePeerId?: false): InputNotifyPeer.inputNotifyPeer;
+  // public getInputNotifyPeerById(peerId: PeerId, ignorePeerId?: boolean): InputNotifyPeer {
+  public getInputNotifyPeerById<T extends {
+    peerId: PeerId,
+    ignorePeerId?: boolean,
+    threadId?: number
+  }>({
+    peerId,
+    ignorePeerId,
+    threadId
+  }: T): T['ignorePeerId'] extends true ? Exclude<InputNotifyPeer, InputNotifyPeer.inputNotifyPeer | InputNotifyPeer.inputNotifyForumTopic> : (T['threadId'] extends number ? InputNotifyPeer.inputNotifyForumTopic : InputNotifyPeer.inputNotifyPeer) {
     if(ignorePeerId) {
       if(peerId.isUser()) {
-        return {_: 'inputNotifyUsers'};
+        return {_: 'inputNotifyUsers'} as any;
       } else {
         if(this.isBroadcast(peerId)) {
-          return {_: 'inputNotifyBroadcasts'};
+          return {_: 'inputNotifyBroadcasts'} as any;
         } else {
-          return {_: 'inputNotifyChats'};
+          return {_: 'inputNotifyChats'} as any;
         }
       }
+    } else if(threadId) {
+      return {
+        _: 'inputNotifyForumTopic',
+        peer: this.getInputPeerById(peerId),
+        top_msg_id: getServerMessageId(threadId)
+      } as any;
     } else {
       return {
         _: 'inputNotifyPeer',
         peer: this.getInputPeerById(peerId)
-      };
+      } as any;
     }
   }
 
@@ -231,15 +282,16 @@ export class AppPeersManager extends AppManager {
     if(this.isUser(peerId)) {
       text = '%pu ' + this.appUsersManager.getUserSearchText(peerId.toUserId());
     } else {
-      const chat = this.appChatsManager.getChat(peerId.toChatId());
-      text = '%pg ' + (chat.title || '');
+      text = '%pg ' + this.appChatsManager.getChatSearchText(peerId.toChatId());
     }
 
     return text;
   }
 
-  public getDialogType(peerId: PeerId): PeerType {
-    if(this.isMegagroup(peerId)) {
+  public getDialogType(peerId: PeerId, threadId?: number): PeerType {
+    if(this.peerId === peerId && threadId) {
+      return 'savedDialog';
+    } else if(this.isMegagroup(peerId)) {
       return 'megagroup';
     } else if(this.isChannel(peerId)) {
       return 'channel';
@@ -267,10 +319,26 @@ export class AppPeersManager extends AppManager {
   public noForwards(peerId: PeerId) {
     if(peerId.isUser()) return false;
     else {
-      const chat = this.appChatsManager.getChatTyped(peerId.toChatId());
+      const chat = this.appChatsManager.getChat(peerId.toChatId());
       return !!(chat as Chat.chat).pFlags?.noforwards;
     }
   }
+
+  public mirrorAllPeers(port?: MessageEventSource) {
+    const peers: any = {
+      ...this.appUsersManager.getUsers()
+    };
+
+    const chats = this.appChatsManager.getChats();
+    for(const chatId in chats) {
+      peers[chatId.toPeerId(true)] = chats[chatId];
+    }
+
+    MTProtoMessagePort.getInstance<false>().invokeVoid('mirror', {
+      name: 'peers',
+      value: peers
+    }, port);
+  }
 }
 
-export type IsPeerType = 'isChannel' | 'isMegagroup' | 'isAnyGroup' | 'isBroadcast' | 'isBot' | 'isContact' | 'isUser' | 'isAnyChat';
+export type IsPeerType = 'isChannel' | 'isMegagroup' | 'isAnyGroup' | 'isBroadcast' | 'isBot' | 'isContact' | 'isUser' | 'isAnyChat' | 'isRegularUser';
